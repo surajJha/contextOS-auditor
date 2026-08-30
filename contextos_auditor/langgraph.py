@@ -23,7 +23,7 @@ from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
 
-from contextos_auditor._internal.base import FrameworkAuditSession
+from contextos_auditor._internal.base import FrameworkAuditSession, guarded
 from contextos_auditor._internal.compat import check_compat
 
 
@@ -95,6 +95,7 @@ class AuditorCallback(BaseCallbackHandler):
         `on_tool_end` below."""
         return _ToolReportSuppressed(self.session)
 
+    @guarded("langgraph.on_tool_start")
     def on_tool_start(
         self,
         serialized: dict[str, Any],
@@ -108,6 +109,7 @@ class AuditorCallback(BaseCallbackHandler):
         args: Any = inputs if inputs is not None else {"input": input_str}
         self._pending_tool_starts[run_id] = {"name": name, "args": args}
 
+    @guarded("langgraph.on_tool_end")
     def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         started = self._pending_tool_starts.pop(run_id, None)
         if started is None:
@@ -115,6 +117,7 @@ class AuditorCallback(BaseCallbackHandler):
         result_text = getattr(output, "content", output)
         self.session.record_tool(started["name"], started["args"], result_text)
 
+    @guarded("langgraph.on_llm_end")
     def on_llm_end(self, response: Any, *, run_id: UUID, **kwargs: Any) -> None:
         usage, model = self._extract_usage(response)
         self.session.record_llm(usage, model)

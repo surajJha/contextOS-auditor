@@ -8,10 +8,18 @@ Initial public release candidate. Not yet published to PyPI — install from
 source in the meantime (see README Quickstart).
 
 ### Added
-- Free, local-only Agent Auditor: attach one line to an existing
-  CrewAI / LangGraph / AutoGen / OpenAI Agents SDK agent and watch its
-  real token cost live. No signup, no telemetry, no data leaves the
-  machine it runs on.
+- Free, local-only Agent Auditor (**noncommercial use only** — licensed
+  under PolyForm Noncommercial 1.0.0, see LICENSE): attach one line to an
+  existing CrewAI / LangGraph / AutoGen / OpenAI Agents SDK agent and
+  watch its real token cost live. No signup, no telemetry, no data leaves
+  the machine it runs on.
+- **Crash isolation (AUD-009)**: every adapter handler and
+  `FrameworkAuditSession` entry point is now `@guarded` — an internal
+  Auditor failure (malformed usage dict, SDK version drift, full disk)
+  can never propagate into the agent's real execution path. Fixed a
+  critical case in the AutoGen adapter where a recording failure could
+  previously discard an already-successful, already-billed LLM call
+  result.
 - Public adapters for all 4 frameworks (`contextos_auditor.crewai`,
   `.langgraph`, `.openai_agents`, `.autogen`), each vendoring (not
   importing) the corresponding internal `dashboard/adapters/*` logic so

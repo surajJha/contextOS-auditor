@@ -1,9 +1,11 @@
 # contextos-auditor
 
-The free, local-only Agent Auditor. Attach one line to an existing
-CrewAI / LangGraph / AutoGen / OpenAI Agents SDK agent and watch its real
-token cost live — no code changes to your tools/prompts, no signup, no
-telemetry, **no data ever leaves your machine**.
+The free (noncommercial-use), local-only Agent Auditor. Attach one line to
+an existing CrewAI / LangGraph / AutoGen / OpenAI Agents SDK agent and
+watch its real token cost live — no code changes to your tools/prompts,
+no signup, no telemetry, **no data ever leaves your machine**. Licensed
+[PolyForm Noncommercial](./LICENSE) — free to run and modify for
+noncommercial use; commercial use needs a separate license.
 
 ```bash
 pip install contextos-auditor[crewai]        # or [langgraph] / [autogen] / [openai-agents] / [all]
@@ -116,6 +118,16 @@ binds a small local HTTP server to `127.0.0.1` only — it is never
 reachable from outside your machine, and the process makes zero outbound
 network calls (see `tests/test_no_network_calls.py`).
 
+Tool calls are recorded with their real arguments and results (e.g. file
+paths and contents your agent read/wrote) so the savings estimate can be
+computed — this can include whatever your own agent's tools touch. Add
+`.contextos/` to your project's `.gitignore` so session data never gets
+committed alongside your code:
+
+```
+echo ".contextos/" >> .gitignore
+```
+
 ## Where this comes from
 
 This package is the public, standalone distribution of the same adapter
@@ -135,4 +147,9 @@ pytest tests/
 
 ## License
 
-MIT
+**Noncommercial use only.** Licensed under
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) —
+see [`LICENSE`](./LICENSE). You're free to run this on your own agents,
+inspect it, and modify it for any noncommercial purpose (personal projects,
+research, evaluation). Commercial use requires a separate license — reach
+out if that's you.

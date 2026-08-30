@@ -32,7 +32,7 @@ from typing import Any
 
 from autogen_core.models import ChatCompletionClient
 
-from contextos_auditor._internal.base import FrameworkAuditSession
+from contextos_auditor._internal.base import FrameworkAuditSession, _warn_once, guarded
 from contextos_auditor._internal.compat import check_compat
 
 
@@ -44,6 +44,7 @@ class AuditingChatCompletionClient(ChatCompletionClient):
         self._wrapped = wrapped
         self._session = session
 
+    @guarded("autogen._record")
     def _record(self, result: Any) -> None:
         usage = getattr(result, "usage", None)
         model = getattr(self._wrapped, "model_info", {}) or {}
@@ -107,13 +108,25 @@ def audit_tool(fn: Any, session: FrameworkAuditSession):
     """
     name = getattr(fn, "__name__", "tool")
 
+    def _safe_record(bound: dict[str, Any], result: Any) -> None:
+        # AUD-009: belt-and-suspenders -- FrameworkAuditSession.record_tool
+        # is already @guarded, but `session` here is a duck-typed parameter
+        # (anything with a record_tool(name, args, result) method), so this
+        # wrapper cannot assume every caller's session object is equally
+        # defensive. The real tool call above has already completed and
+        # `result` must reach the caller no matter what happens here.
+        try:
+            session.record_tool(name, bound, result)
+        except Exception as exc:  # noqa: BLE001 -- intentional, see above
+            _warn_once(f"autogen.audit_tool({name!r})", exc)
+
     if inspect.iscoroutinefunction(fn):
 
         @functools.wraps(fn)
         async def _async_wrapped(*args: Any, **kwargs: Any):
             bound = _bind_args(fn, args, kwargs)
             result = await fn(*args, **kwargs)
-            session.record_tool(name, bound, result)
+            _safe_record(bound, result)
             return result
 
         return _async_wrapped
@@ -122,7 +135,7 @@ def audit_tool(fn: Any, session: FrameworkAuditSession):
     def _sync_wrapped(*args: Any, **kwargs: Any):
         bound = _bind_args(fn, args, kwargs)
         result = fn(*args, **kwargs)
-        session.record_tool(name, bound, result)
+        _safe_record(bound, result)
         return result
 
     return _sync_wrapped
@@ -131,11 +144,15 @@ def audit_tool(fn: Any, session: FrameworkAuditSession):
 def _bind_args(fn: Any, args: tuple, kwargs: dict) -> dict[str, Any]:
     """Best-effort: resolve positional args to parameter names too, so
     record_tool always sees a name-keyed dict (needed for the path/content
-    lookups shadow_kit relies on) regardless of how the caller invoked fn."""
+    lookups shadow_kit relies on) regardless of how the caller invoked fn.
+
+    AUD-009: runs *before* the real tool call, so any exception here --
+    not just the expected TypeError from a signature mismatch -- must never
+    block the real `fn(*args, **kwargs)` call below from executing."""
     try:
         bound = inspect.signature(fn).bind_partial(*args, **kwargs)
         return dict(bound.arguments)
-    except TypeError:
+    except Exception:  # noqa: BLE001 -- intentional, see docstring
         return dict(kwargs) or {"args": args}
 
 

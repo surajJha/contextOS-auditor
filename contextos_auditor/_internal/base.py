@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,52 @@ from contextos_auditor._internal.dedupe import DedupeGuard
 # watching it record as write_file.
 _WRITE_ALIASES = {"write_file", "writefile", "write_to_file", "create_file", "update_file"}
 _READ_ALIASES = {"read_file", "readfile", "read_text_file"}
+
+# AUD-009: this adapter observes a live, real agent run from inside its own
+# process (registered directly on the framework's event bus / callback
+# manager / model-client wrapper). If any of *our* code raises -- a
+# malformed usage dict, an unexpected event shape from a newer/older SDK
+# version, a full disk -- that exception must never propagate back into the
+# agent's real execution path. An observability tool that can crash the
+# thing it observes is disqualifying for production use, full stop.
+#
+# `guarded` wraps every adapter handler method and every FrameworkAuditSession
+# entry point below: on failure it emits one `UserWarning` per distinct
+# label per process (so failures stay discoverable, not silently swallowed
+# forever) and returns None instead of raising.
+_warned_labels: set[str] = set()
+
+
+def _warn_once(label: str, exc: Exception) -> None:
+    if label in _warned_labels:
+        return
+    _warned_labels.add(label)
+    warnings.warn(
+        f"contextos-auditor: internal error in {label}, this observation was "
+        f"dropped but your agent's real run is unaffected ({exc.__class__.__name__}: {exc}). "
+        "This warning only appears once per process; run with "
+        "`python -W always::UserWarning` for every occurrence.",
+        stacklevel=3,
+    )
+
+
+def guarded(label: str):
+    """Decorator: never let an exception out of the wrapped function. See
+    the module-level comment above for why this is not optional."""
+
+    def decorator(fn):
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 -- intentional, see docstring
+                _warn_once(label, exc)
+                return None
+
+        wrapper.__name__ = getattr(fn, "__name__", label)
+        wrapper.__doc__ = fn.__doc__
+        return wrapper
+
+    return decorator
 
 
 def _normalize_tool_name(name: str) -> str:
@@ -123,6 +170,7 @@ class FrameworkAuditSession:
     def session_id(self) -> str:
         return self._session.session_id
 
+    @guarded("FrameworkAuditSession.record_tool")
     def record_tool(self, name: str, args: Any, result: Any) -> None:
         """Buffer a tool call; flushed into the next `record_llm` turn.
 
@@ -149,6 +197,7 @@ class FrameworkAuditSession:
         with self._lock:
             self._pending_tools.append(row)
 
+    @guarded("FrameworkAuditSession.record_llm")
     def record_llm(self, usage: dict[str, Any] | None, model: str | None = None) -> None:
         """Flush buffered tool calls together with this LLM call's usage."""
         usage = usage or {}
@@ -173,6 +222,7 @@ class FrameworkAuditSession:
             tool_calls=tool_calls,
         )
 
+    @guarded("FrameworkAuditSession.finish")
     def finish(self, *, success: bool | None = None, error: str = "") -> None:
         with self._lock:
             leftover = self._pending_tools

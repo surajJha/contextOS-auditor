@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "contextos-auditor"
 version = "0.1.0"
-description = "Free, local-only Agent Auditor -- attach one line to a CrewAI/LangGraph/AutoGen/OpenAI-Agents-SDK agent and watch its real token cost live. No signup, no telemetry, no data leaves your machine."
+description = "The free, local-only Agent Auditor -- attach one line to a CrewAI/LangGraph/AutoGen/OpenAI-Agents-SDK agent and watch its real token cost live. No signup, no telemetry, no data leaves your machine. Noncommercial use only -- see LICENSE."
 readme = "README.md"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [{ name = "ContextOS contributors" }]
 keywords = ["llm", "agents", "tokens", "cost", "observability", "crewai", "langgraph", "autogen", "openai-agents"]
 classifiers = [
-  "License :: OSI Approved :: MIT License",
+  "License :: Other/Proprietary License",
   "Programming Language :: Python :: 3",
   "Intended Audience :: Developers",
   "Topic :: Software Development :: Libraries",

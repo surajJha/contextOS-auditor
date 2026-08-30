@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from contextos_auditor._internal.base import FrameworkAuditSession
+from contextos_auditor._internal.base import FrameworkAuditSession, guarded
 from contextos_auditor._internal.compat import check_compat
 
 
@@ -63,6 +63,7 @@ class OpenAIAgentsAuditAdapter:
         )
         self._processor: Any = None
 
+    @guarded("openai_agents.on_span_end")
     def on_span_end(self, span: Any) -> None:
         """Bound method (named, not a closure) so tests can drive it
         directly with a fake span object without a real Runner.run()."""

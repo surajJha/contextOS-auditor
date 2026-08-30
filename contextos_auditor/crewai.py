@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from contextos_auditor._internal.base import FrameworkAuditSession
+from contextos_auditor._internal.base import FrameworkAuditSession, _warn_once, guarded
 from contextos_auditor._internal.compat import check_compat
 
 
@@ -67,9 +67,11 @@ class CrewAIAuditAdapter:
         )
         self._handlers: list[tuple[Any, Any]] = []
 
+    @guarded("crewai.on_llm_completed")
     def on_llm_completed(self, source: Any, event: Any) -> None:
         self.session.record_llm(event.usage or {}, event.model)
 
+    @guarded("crewai.on_tool_finished")
     def on_tool_finished(self, source: Any, event: Any) -> None:
         self.session.record_tool(event.tool_name, event.tool_args, event.output)
 
@@ -88,7 +90,13 @@ class CrewAIAuditAdapter:
     def detach(self, *, success: bool | None = None, error: str = "") -> None:
         from crewai.events.event_bus import crewai_event_bus
 
+        # AUD-009: unregister best-effort per handler -- one failing `off()`
+        # call must not skip the rest, and must never prevent session.finish()
+        # below from running (that's the caller's real "run ended" signal).
         for event_type, handler in self._handlers:
-            crewai_event_bus.off(event_type, handler)
+            try:
+                crewai_event_bus.off(event_type, handler)
+            except Exception as exc:  # noqa: BLE001 -- see comment above
+                _warn_once(f"crewai.detach.off({event_type!r})", exc)
         self._handlers = []
         self.session.finish(success=success, error=error)
