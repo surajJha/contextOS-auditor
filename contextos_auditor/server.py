@@ -62,7 +62,7 @@ def _make_handler(session_dir: Path, poll_interval: float, snapshot_fn):
                 "</body>",
                 "<script>\n"
                 "const es = new EventSource('/events');\n"
-                "es.onmessage = (e) => { document.body.innerHTML = e.data; };\n"
+                "es.onmessage = (e) => { document.body.innerHTML = JSON.parse(e.data); };\n"
                 "</script>\n</body>",
             )
             self.send_response(200)

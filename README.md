@@ -14,6 +14,11 @@ pip install contextos-auditor[crewai]        # or [langgraph] / [autogen] / [ope
 Requires Python >= 3.10. Zero required runtime dependencies — every
 framework SDK above is an optional extra you opt into.
 
+![Live Auditor dashboard, screenshot of a real crewAI session](./docs/screenshots/live-dashboard.png)
+
+*A real `watch --serve` screenshot from a live CrewAI run — actual token
+counts, estimated $ cost, and detected waste tokens, not a mockup.*
+
 ### "I don't have a Python env set up"
 
 If you're attaching this to your own agent: CrewAI/LangGraph/AutoGen/

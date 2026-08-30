@@ -63,6 +63,16 @@ source in the meantime (see README Quickstart).
   Python/pip on their machine at all. Verified to run correctly in a fully
   empty environment (`env -i`, no PATH/PYTHONHOME).
 
+### Fixed
+- **P0**: `watch --serve`'s live dashboard corrupted itself into visible
+  raw `\n`/quote-mark text after the very first live update. The server
+  correctly JSON-encodes each SSE fragment (`json.dumps(fragment)`) but
+  the injected client-side JS assigned the raw, still-encoded string
+  straight into `document.body.innerHTML` instead of decoding it first.
+  Found via a real headless-Chrome screenshot of the running dashboard,
+  not code review. Fixed: client now does `JSON.parse(e.data)` before
+  use. Regression test: `tests/test_server_sse_parse.py`.
+
 ### Known limitations
 - The `_internal/*.py` vendor copies are manually synced against the
   monorepo's `dashboard/`/`kit/`/`spike/` originals — not automatic. See
