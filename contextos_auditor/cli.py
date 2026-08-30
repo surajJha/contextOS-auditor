@@ -75,15 +75,46 @@ def _resolve_session_dir(args: argparse.Namespace) -> Path | None:
     return find_running_session(audit_root)
 
 
-def cmd_watch(args: argparse.Namespace) -> int:
+def _wait_for_session_dir(args: argparse.Namespace, poll_seconds: float = 1.0) -> Path | None:
+    """`watch`/`watch --serve` are commonly started *before* the agent run
+    (open the dashboard, then kick off the agent) -- just as often as the
+    reverse order. Poll for a session to appear instead of failing
+    immediately, so starting the dashboard first isn't a dead end.
+    Returns None only on Ctrl-C (caller should exit 130 in that case)."""
     session_dir = _resolve_session_dir(args)
-    if session_dir is None:
-        print(
-            f"No session found under {args.audit_root} (no */events.jsonl yet).\n"
-            f"Attach the Auditor in your agent code first -- see "
-            f"`contextos-auditor doctor` for the exact snippet for your framework."
-        )
-        return 1
+    if session_dir is not None:
+        return session_dir
+    print(
+        f"No session found yet under {args.audit_root} -- waiting for one to start "
+        f"(Ctrl-C to stop).\nAttach the Auditor in your agent code first -- see "
+        f"`contextos-auditor doctor` for the exact snippet for your framework."
+    )
+    try:
+        while session_dir is None:
+            time.sleep(poll_seconds)
+            session_dir = _resolve_session_dir(args)
+    except KeyboardInterrupt:
+        print("\nStopped waiting.")
+        return None
+    print(f"Session found: {session_dir.name}\n")
+    return session_dir
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    if args.once:
+        # Scriptable one-shot use (e.g. CI) -- fail fast rather than block.
+        session_dir = _resolve_session_dir(args)
+        if session_dir is None:
+            print(
+                f"No session found under {args.audit_root} (no */events.jsonl yet).\n"
+                f"Attach the Auditor in your agent code first -- see "
+                f"`contextos-auditor doctor` for the exact snippet for your framework."
+            )
+            return 1
+    else:
+        session_dir = _wait_for_session_dir(args)
+        if session_dir is None:
+            return 130
     if not session_dir.is_dir():
         print(f"Session directory not found: {session_dir}")
         return 1
@@ -91,13 +122,15 @@ def cmd_watch(args: argparse.Namespace) -> int:
     if args.serve:
         return serve_session(session_dir, poll_interval=args.poll_interval, port=args.port)
 
-    def _poll_once() -> None:
+    def _poll_once() -> bool:
+        """Returns True if the session has reached a terminal status."""
         session_id, meta, result = snapshot(session_dir)
         print(render_terminal(session_id, meta, result))
         if args.html:
             out_path = Path(args.html)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(render_html(session_id, meta, result, args.poll_interval))
+        return meta.get("status") in ("finished", "error")
 
     if args.once:
         _poll_once()
@@ -105,7 +138,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
     try:
         while True:
-            _poll_once()
+            done = _poll_once()
+            if done:
+                print("\nSession finished -- stopping (rerun with --once for a static snapshot).")
+                break
             print()
             time.sleep(args.poll_interval)
     except KeyboardInterrupt:
