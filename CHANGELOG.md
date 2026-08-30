@@ -32,6 +32,11 @@ source in the meantime (see README Quickstart).
   `UserWarning` (never a hard failure) when an installed framework SDK
   version falls outside the range the vendored adapter was last verified
   against, surfaced proactively in `contextos-auditor doctor`.
+- `scripts/build_binary.sh`: builds a standalone, single-file CLI binary
+  (PyInstaller, built from a clean venv with zero framework extras) for
+  teammates who want to `watch`/`report`/`doctor` a session without any
+  Python/pip on their machine at all. Verified to run correctly in a fully
+  empty environment (`env -i`, no PATH/PYTHONHOME).
 
 ### Known limitations
 - The `_internal/*.py` vendor copies are manually synced against the

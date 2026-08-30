@@ -12,6 +12,36 @@ pip install contextos-auditor[crewai]        # or [langgraph] / [autogen] / [ope
 Requires Python >= 3.10. Zero required runtime dependencies — every
 framework SDK above is an optional extra you opt into.
 
+### "I don't have a Python env set up"
+
+If you're attaching this to your own agent: CrewAI/LangGraph/AutoGen/
+OpenAI Agents SDK are all Python-native frameworks, so if your agent runs
+at all, you already have a working Python + pip — that's how you installed
+the framework itself. The `attach()`/callback-handler snippet has to be
+`pip install`ed into that *same* interpreter no matter what, since it hooks
+the framework's own event bus from inside your process.
+
+If your `pip install` fails with an `externally-managed-environment` error
+(common on recent macOS/Debian system Pythons), use one of:
+
+```bash
+pipx install "contextos-auditor[crewai]"     # isolates it into its own venv automatically
+uv pip install "contextos-auditor[crewai]"   # if you already use uv
+```
+
+If you just want to **view** a session someone else's agent produced (a
+teammate, a CI run, a reviewer) and don't want to touch Python/pip at all,
+grab the standalone `contextos-auditor` binary from the
+[GitHub Releases](../../releases) page instead — it only does `watch`/
+`report`/`doctor` (no framework adapter, since those must live inside the
+agent's own process either way):
+
+```bash
+./contextos-auditor watch --serve   # same CLI, zero Python required
+```
+
+See `scripts/build_binary.sh` if you want to build one yourself.
+
 ## Quickstart
 
 ```python
