@@ -124,6 +124,31 @@ discounts/enterprise agreements/cached-token pricing are not modeled. If
 your model isn't in the table, the Auditor shows "no dated pricing
 available" — it never guesses or interpolates a number.
 
+## Exporting to your existing observability stack (optional)
+
+By default, the Auditor only ever writes to a local JSONL/JSON directory
+on your disk — nothing else. If your team already runs an OTel collector
+(Datadog, Grafana, Honeycomb, Jaeger, ...), you can *additionally* export
+each turn as a real OTel span following the
+[OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+(`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, ...):
+
+```bash
+pip install contextos-auditor[otel]
+```
+
+```python
+audit = attach(task="...", otel_endpoint="http://localhost:4318/v1/traces")
+# or, with zero code changes:
+# CONTEXTOS_OTEL_ENDPOINT=http://localhost:4318/v1/traces python your_agent.py
+```
+
+This is strictly additive and opt-in: nothing is exported unless you set
+one of the two above, the local JSONL trail is completely unaffected
+either way, and if the optional package isn't installed or the endpoint
+is unreachable, export is silently disabled (one `UserWarning`) rather
+than breaking your agent's real run.
+
 ## Privacy
 
 Session data (`events.jsonl`/`session.json`) is written to a directory on

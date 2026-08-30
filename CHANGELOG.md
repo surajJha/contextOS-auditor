@@ -8,6 +8,16 @@ Initial public release candidate. Not yet published to PyPI — install from
 source in the meantime (see README Quickstart).
 
 ### Added
+- **Optional OTel export (AUD-012)**: `pip install contextos-auditor[otel]`
+  plus `attach(..., otel_endpoint="http://localhost:4318/v1/traces")` (or
+  the `CONTEXTOS_OTEL_ENDPOINT` env var, zero code changes) makes every
+  adapter additionally export each turn as a real OTel span following the
+  GenAI semantic conventions (`gen_ai.system`, `gen_ai.request.model`,
+  `gen_ai.usage.input_tokens/output_tokens`, `gen_ai.tool.name`, ...) --
+  verified against a real local OTLP/HTTP receiver. Strictly additive and
+  opt-in: the local JSONL trail is unaffected either way, and a missing
+  package or unreachable collector degrades to one `UserWarning`, never a
+  crash in the agent's real run.
 - **Real $ cost estimate (AUD-011)**: sessions for models in a small,
   hand-curated, dated pricing snapshot (`_internal/pricing.py`, sourced
   from litellm's publicly maintained pricing table) now show an

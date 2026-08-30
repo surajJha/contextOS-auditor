@@ -73,6 +73,7 @@ class AuditorCallback(BaseCallbackHandler):
         session_id: str | None = None,
         arm: str = "baseline",
         workspace_root: str | None = None,
+        otel_endpoint: str | None = None,
     ) -> None:
         super().__init__()
         check_compat("langgraph")
@@ -84,6 +85,7 @@ class AuditorCallback(BaseCallbackHandler):
             session_id=session_id,
             arm=arm,
             workspace_root=workspace_root,
+            otel_endpoint=otel_endpoint,
         )
         self._pending_tool_starts: dict[UUID, dict[str, Any]] = {}
 

@@ -31,12 +31,14 @@ def attach(
     out_dir=None,
     arm: str = "baseline",
     session_id: str | None = None,
+    otel_endpoint: str | None = None,
 ) -> "CrewAIAuditAdapter":
     """Attach the Auditor to CrewAI's global event bus. One call, no changes
     to your `Crew`/`Agent`/`Task` code. Call `.detach()` when the run ends."""
     check_compat("crewai")
     adapter = CrewAIAuditAdapter(
-        model_hint=model_hint, task=task, out_dir=out_dir, arm=arm, session_id=session_id
+        model_hint=model_hint, task=task, out_dir=out_dir, arm=arm,
+        session_id=session_id, otel_endpoint=otel_endpoint,
     )
     adapter.attach()
     return adapter
@@ -56,6 +58,7 @@ class CrewAIAuditAdapter:
         out_dir=None,
         arm: str = "baseline",
         session_id: str | None = None,
+        otel_endpoint: str | None = None,
     ) -> None:
         self.session = FrameworkAuditSession(
             framework="crewai",
@@ -64,6 +67,7 @@ class CrewAIAuditAdapter:
             out_dir=out_dir,
             arm=arm,
             session_id=session_id,
+            otel_endpoint=otel_endpoint,
         )
         self._handlers: list[tuple[Any, Any]] = []
 

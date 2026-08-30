@@ -32,10 +32,12 @@ def attach(
     out_dir=None,
     arm: str = "baseline",
     session_id: str | None = None,
+    otel_endpoint: str | None = None,
 ) -> "OpenAIAgentsAuditAdapter":
     check_compat("openai_agents")
     adapter = OpenAIAgentsAuditAdapter(
-        model_hint=model_hint, task=task, out_dir=out_dir, arm=arm, session_id=session_id
+        model_hint=model_hint, task=task, out_dir=out_dir, arm=arm,
+        session_id=session_id, otel_endpoint=otel_endpoint,
     )
     adapter.attach()
     return adapter
@@ -50,6 +52,7 @@ class OpenAIAgentsAuditAdapter:
         out_dir=None,
         arm: str = "baseline",
         session_id: str | None = None,
+        otel_endpoint: str | None = None,
     ) -> None:
         # AUDIT-008: see crewai_adapter's identical comment -- arm/session_id
         # were previously unreachable through the public attach function.
@@ -60,6 +63,7 @@ class OpenAIAgentsAuditAdapter:
             out_dir=out_dir,
             arm=arm,
             session_id=session_id,
+            otel_endpoint=otel_endpoint,
         )
         self._processor: Any = None
 

@@ -17,6 +17,7 @@ shape `contextos_auditor._internal.audit_emit` understands, so
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 import warnings
@@ -25,6 +26,7 @@ from typing import Any
 
 from contextos_auditor._internal.audit_emit import AuditSession
 from contextos_auditor._internal.dedupe import DedupeGuard
+from contextos_auditor._internal.otel_export import build_exporter
 from contextos_auditor._internal.pricing import estimate_usd
 
 # Tool-name aliases the file-write/read detector in shadow_kit.py understands.
@@ -125,6 +127,7 @@ class FrameworkAuditSession:
         session_id: str | None = None,
         arm: str = "baseline",
         workspace_root: str | Path | None = None,
+        otel_endpoint: str | None = None,
     ) -> None:
         root = out_dir or (Path.cwd() / ".contextos" / "audit")
         sid = session_id or f"{framework}-{int(time.time() * 1000)}"
@@ -166,6 +169,13 @@ class FrameworkAuditSession:
         # crewai_adapter's test for the direct-call pattern that sidesteps
         # this entirely).
         self._lock = threading.Lock()
+        # AUD-012: opt-in only -- explicit otel_endpoint kwarg wins, else
+        # fall back to CONTEXTOS_OTEL_ENDPOINT so a zero-code-change env var
+        # can enable it for any of the 4 adapters. build_exporter() returns
+        # None (no object at all) when neither is set, so every existing
+        # caller pays nothing for this feature's existence.
+        endpoint = otel_endpoint or os.environ.get("CONTEXTOS_OTEL_ENDPOINT")
+        self._otel = build_exporter(endpoint, framework=framework)
 
     @property
     def session_id(self) -> str:
@@ -233,6 +243,17 @@ class FrameworkAuditSession:
             },
             tool_calls=tool_calls,
         )
+        if self._otel is not None:
+            for call in tool_calls:
+                self._otel.export_tool_call(name=call["name"], turn=turn)
+            self._otel.export_llm_turn(
+                turn=turn,
+                model=self._session.model,
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                total_tokens=total,
+                estimated_usd=estimate_usd(self._session.model, prompt, completion),
+            )
 
     @guarded("FrameworkAuditSession.finish")
     def finish(self, *, success: bool | None = None, error: str = "") -> None:
