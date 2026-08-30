@@ -79,9 +79,8 @@ crew (support triage → reply writer → config-file maintainer). Shows:
 - 4 frameworks supported today (CrewAI, LangGraph, AutoGen, OpenAI
   Agents SDK) — no framework support beyond that at launch.
 
-## Open decision before publishing
+## Decision (resolved)
 
-**PyPI vs. git-install for launch day** — ask the user: are we
-publishing to PyPI first (removes the biggest install-friction
-objection), or launching with the git-install command and fixing PyPI
-as fast-follow?
+Launching with the `pip install git+https://github.com/...` command as-is.
+PyPI publish is a fast-follow, not a launch blocker. Say so plainly in
+the first comment / FAQ if asked, rather than waiting to be called out.
