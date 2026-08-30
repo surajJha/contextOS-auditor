@@ -8,6 +8,11 @@ Initial public release candidate. Not yet published to PyPI — install from
 source in the meantime (see README Quickstart).
 
 ### Added
+- **`contextos-auditor history` command (AUD-014)**: lists every recorded
+  session under `--audit-root`, newest first, with framework/model/status/
+  turns/tokens/cost/save% columns, `--limit N` (default 20, `0` = no cap).
+  Reads only the session files each run already writes; no new database
+  or aggregation step.
 - **Optional secret-pattern redaction (AUD-016)**: `attach(...,
   redact_secrets=True)` (or `CONTEXTOS_REDACT_SECRETS=1`) scrubs
   recognizable secret-shaped substrings (AWS/OpenAI/GitHub/Slack-style

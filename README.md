@@ -101,6 +101,22 @@ Not sure any of this is working? Run `contextos-auditor doctor` first —
 it tells you exactly which framework SDKs it can see and prints the
 correct snippet for each, before you touch your agent code at all.
 
+## Viewing past sessions
+
+Every run is written to its own directory under `--audit-root`
+(`.contextos/audit` by default) and never overwritten or pruned. To see
+every recorded session at a glance — not just the most recent one that
+`watch`/`report` show by default — run:
+
+```bash
+contextos-auditor history                # newest 20 sessions
+contextos-auditor history --limit 0      # every session, no cap
+contextos-auditor history --limit 5      # newest 5
+```
+
+This reads only the `session.json`/JSONL files each session already
+writes — no separate database, no aggregation step to keep in sync.
+
 ## What it actually measures
 
 Every number is a real token count pulled from the framework's own usage

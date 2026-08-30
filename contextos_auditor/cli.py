@@ -7,6 +7,7 @@
     contextos-auditor watch --html out.html  # also write a static HTML report
     contextos-auditor watch --serve          # localhost-only live view (SSE)
     contextos-auditor report <session-id>    # one-shot final summary
+    contextos-auditor history                # list past sessions + aggregate stats
     contextos-auditor doctor                 # which framework SDKs/hooks are
                                               # available in this environment
 """
@@ -164,6 +165,51 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _all_session_dirs(audit_root: Path) -> list[Path]:
+    """Every session directory under `audit_root`, newest first -- a session
+    counts even if it's still `running` (has events.jsonl but no terminal
+    status yet), matching `find_running_session`'s definition of "exists"."""
+    dirs = {p.parent for p in audit_root.glob("*/session.json")}
+    return sorted(dirs, key=lambda p: (p / "session.json").stat().st_mtime, reverse=True)
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    """AUD-014: `watch`/`report` only ever look at the single
+    most-recently-modified session -- there was no way to see past runs or
+    a trend across them without opening each session.json/events.jsonl by
+    hand. Lists every session under --audit-root with basic aggregate
+    stats, newest first. No database, no new files written -- purely a
+    read-and-summarize view over the JSONL each session already writes."""
+    audit_root = Path(args.audit_root)
+    session_dirs = _all_session_dirs(audit_root)
+    if not session_dirs:
+        print(f"No sessions found under {audit_root}")
+        return 0
+    if args.limit:
+        session_dirs = session_dirs[: args.limit]
+
+    header = (
+        f"{'session':<30}  {'framework':<12}  {'model':<16}  {'status':<9}  "
+        f"{'turns':>5}  {'tokens':>8}  {'cost':>10}  {'save%':>7}"
+    )
+    print(header)
+    print("-" * len(header))
+    for session_dir in session_dirs:
+        session_id, meta, result = snapshot(session_dir)
+        usd = result["actual"].get("estimated_usd")
+        usd_str = f"${usd:.4f}" if usd is not None else "n/a"
+        print(
+            f"{session_id:<30.30}  {str(meta.get('framework', '?')):<12.12}  "
+            f"{str(meta.get('model', '?')):<16.16}  {str(meta.get('status', '?')):<9.9}  "
+            f"{len(result['turns']):>5}  {result['actual']['total_tokens']:>8}  "
+            f"{usd_str:>10}  {result['save_pct']:>+6.1f}%"
+        )
+    total_sessions = len(_all_session_dirs(audit_root))
+    if args.limit and total_sessions > len(session_dirs):
+        print(f"\n(showing {len(session_dirs)} most recent of {total_sessions} -- see --limit)")
+    return 0
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     print("contextos-auditor doctor -- framework hook availability\n")
     any_found = False
@@ -221,6 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("session_id", nargs="?", help="session id under --audit-root (defaults to the most recent)")
     p_report.add_argument("--html", help="write a static HTML report here")
     p_report.set_defaults(func=cmd_report)
+
+    p_history = sub.add_parser("history", parents=[common], help="list past sessions under --audit-root with aggregate stats")
+    p_history.add_argument("--limit", type=int, default=20, help="show at most this many sessions, newest first (0 = no limit)")
+    p_history.set_defaults(func=cmd_history)
 
     p_doctor = sub.add_parser("doctor", help="check which framework SDKs/hooks are available")
     p_doctor.set_defaults(func=cmd_doctor)
