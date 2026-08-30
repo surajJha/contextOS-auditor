@@ -51,20 +51,84 @@ _HTML_TEMPLATE = """<!doctype html>
 {refresh_tag}
 <title>Live Auditor -- {session_id}</title>
 <style>
-body {{ font-family: -apple-system, sans-serif; margin: 2rem; background: #fafafa; color: #1a1a1a; }}
-.pct {{ font-size: 2.2rem; font-weight: 700; }}
-.pct.pos {{ color: #2e7d32; }}
-.pct.neg {{ color: #c62828; }}
-table {{ border-collapse: collapse; margin: 1rem 0; }}
-th, td {{ border: 1px solid #ddd; padding: 0.4rem 0.7rem; text-align: right; }}
-th:first-child, td:first-child {{ text-align: left; }}
-.disclaimer {{ font-size: 0.8rem; color: #666; max-width: 500px; }}
+:root {{
+  --bg: #05070d;
+  --panel: #0d1220;
+  --panel-border: #1c2436;
+  --text: #e7ebf5;
+  --text-dim: #8792a8;
+  --text-dimmer: #5b6478;
+  --accent: #7c5cff;
+  --pos: #35e2c4;
+  --neg: #ff5c7a;
+  --radius: 14px;
+  --mono: "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}}
+* {{ box-sizing: border-box; }}
+body {{
+  font-family: var(--sans);
+  margin: 0;
+  padding: 2.5rem 2rem;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}}
+.wrap {{ max-width: 720px; margin: 0 auto; }}
+h1 {{
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.9rem;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.5rem;
+  color: var(--text);
+}}
+.meta {{
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin: 0 0 1.75rem;
+}}
+.savings-label {{
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.35rem;
+}}
+.pct {{ font-family: var(--display); font-size: 2.6rem; font-weight: 700; margin: 0 0 1.75rem; }}
+.pct.pos {{ color: var(--pos); }}
+.pct.neg {{ color: var(--neg); }}
+table {{
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin: 0 0 1.5rem;
+}}
+th, td {{
+  padding: 0.65rem 1rem;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--panel-border);
+}}
+tr:last-child th, tr:last-child td {{ border-bottom: none; }}
+th {{ text-align: left; font-weight: 500; color: var(--text-dim); }}
+td {{ color: var(--text); }}
+.disclaimer {{ font-size: 0.8rem; color: var(--text-dimmer); max-width: 560px; }}
+a {{ color: var(--accent); }}
 </style>
 </head>
 <body>
+<div class="wrap">
 <h1>Live Auditor</h1>
-<p>session={session_id} &middot; framework={framework} &middot; model={model} &middot; status={status}</p>
-<p>Estimated savings if Kit were attached:</p>
+<p class="meta">session={session_id} &middot; framework={framework} &middot; model={model} &middot; status={status}</p>
+<p class="savings-label">Estimated savings if Kit were attached</p>
 <div class="pct {pct_class}">{pct_str}</div>
 <table>
 <tr><th>turns so far</th><td>{n_turns}</td></tr>
@@ -77,6 +141,7 @@ th:first-child, td:first-child {{ text-align: left; }}
 </table>
 <p class="disclaimer">{disclaimer}</p>
 {footer}
+</div>
 </body>
 </html>
 """

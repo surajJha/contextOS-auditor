@@ -72,6 +72,14 @@ source in the meantime (see README Quickstart).
   Found via a real headless-Chrome screenshot of the running dashboard,
   not code review. Fixed: client now does `JSON.parse(e.data)` before
   use. Regression test: `tests/test_server_sse_parse.py`.
+- Restyled `watch`/`watch --serve`/`--html`'s dashboard to match the
+  marketing site's dark theme (same background/panel/accent colors,
+  mono-font numeric table, teal-for-positive/red-for-negative percent)
+  instead of the previous unstyled light-mode default — this is now the
+  one visual identity used everywhere the product shows a UI. Deliberately
+  does not load the marketing site's Google Fonts (system-font fallback
+  only), keeping the dashboard's own zero-external-network guarantee
+  (AUD-005) intact for the actual tool, not just the marketing page.
 
 ### Known limitations
 - The `_internal/*.py` vendor copies are manually synced against the
