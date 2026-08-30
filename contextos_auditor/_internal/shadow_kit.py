@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 from contextos_auditor._internal import tokens as tk
+from contextos_auditor._internal.pricing import PRICING_SNAPSHOT_DATE, PRICING_SOURCE_URL
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,8 @@ def shadow_session(events: list[dict]) -> dict:
     actual_total_tokens = 0
     waste_tokens = 0
     levers_fired: set[str] = set()
+    actual_usd = 0.0
+    usd_fully_priced = True  # flips to False the first turn with tokens but no dated price
 
     for ev in events:
         kind = ev.get("kind")
@@ -161,6 +164,11 @@ def shadow_session(events: list[dict]) -> dict:
             actual_completion += completion
             actual_total_tokens += total
             actual_nano += nano
+            usd = cost.get("estimated_usd")
+            if usd is not None:
+                actual_usd += float(usd)
+            elif total > 0:
+                usd_fully_priced = False
             tool_calls = ev.get("tool_calls") or []
             levers_fired |= _levers_fired_from_tool_calls(tool_calls)
             turns.append(
@@ -219,6 +227,19 @@ def shadow_session(events: list[dict]) -> dict:
             "completion_tokens": actual_completion,
             "total_tokens": actual_total_tokens,
             "total_nano_aiu": actual_nano,
+            # AUD-011: dated $ estimate, only populated when every turn's
+            # model had a citable price in _internal/pricing.py -- None
+            # (not 0) otherwise, so a partially-priced multi-model session
+            # never silently under-reports.
+            "estimated_usd": (
+                round(actual_usd, 6)
+                if usd_fully_priced and actual_total_tokens > 0
+                else None
+            ),
+        },
+        "pricing": {
+            "source": PRICING_SOURCE_URL,
+            "snapshot_date": PRICING_SNAPSHOT_DATE,
         },
         "kit_estimate": {
             "total_nano_aiu": kit_nano,

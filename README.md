@@ -109,6 +109,16 @@ been than the full-file write your agent actually sent) — it does not
 change your bill, and it is clearly labeled `estimated` everywhere it
 appears, never presented as a measured result.
 
+**$ cost** is shown alongside token counts when your session's model is
+in a small, hand-curated, dated pricing snapshot
+(`contextos_auditor/_internal/pricing.py`), sourced from
+[litellm's publicly maintained pricing table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
+This is a **list-price estimate, not your actual bill**: providers change
+prices without notice, this snapshot will go stale, and volume
+discounts/enterprise agreements/cached-token pricing are not modeled. If
+your model isn't in the table, the Auditor shows "no dated pricing
+available" — it never guesses or interpolates a number.
+
 ## Privacy
 
 Session data (`events.jsonl`/`session.json`) is written to a directory on

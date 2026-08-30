@@ -25,6 +25,7 @@ from typing import Any
 
 from contextos_auditor._internal.audit_emit import AuditSession
 from contextos_auditor._internal.dedupe import DedupeGuard
+from contextos_auditor._internal.pricing import estimate_usd
 
 # Tool-name aliases the file-write/read detector in shadow_kit.py understands.
 # Framework tool names vary (write_file, WriteFileTool, apply_patch, ...); we
@@ -226,7 +227,10 @@ class FrameworkAuditSession:
                 "completion_tokens": completion,
                 "total_tokens": total,
             },
-            cost={"total_nano_aiu": 0},
+            cost={
+                "total_nano_aiu": 0,
+                "estimated_usd": estimate_usd(self._session.model, prompt, completion),
+            },
             tool_calls=tool_calls,
         )
 

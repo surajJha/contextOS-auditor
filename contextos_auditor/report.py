@@ -7,6 +7,17 @@ import html
 from typing import Any
 
 
+def _usd_line(result: dict[str, Any]) -> str | None:
+    usd = result["actual"].get("estimated_usd")
+    if usd is None:
+        return None
+    pricing = result.get("pricing", {})
+    return (
+        f"estimated cost: ${usd:.4f} (list price as of {pricing.get('snapshot_date', '?')}, "
+        f"not your negotiated rate -- see {pricing.get('source', '?')})"
+    )
+
+
 def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any]) -> str:
     actual = result["actual"]
     kit = result["kit_estimate"]
@@ -17,6 +28,14 @@ def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any
         f"turns so far: {len(result['turns'])}",
         f"actual:  prompt={actual['prompt_tokens']} completion={actual['completion_tokens']} "
         f"total={actual['total_tokens']} nano_aiu={actual['total_nano_aiu']}",
+    ]
+    usd_line = _usd_line(result)
+    lines.append(
+        usd_line
+        if usd_line
+        else "estimated cost: n/a (no dated pricing available for this session's model)"
+    )
+    lines += [
         f"kit estimate: waste_tokens={kit['write_waste_tokens']} ({kit['basis']}-based)",
         f"estimated savings if Kit were attached: {result['save_pct']:+.1f}%",
         f"levers that would fire: {', '.join(result['levers_fired']) or '(none observed yet)'}",
@@ -52,6 +71,7 @@ th:first-child, td:first-child {{ text-align: left; }}
 <tr><th>actual prompt tokens</th><td>{prompt_tokens}</td></tr>
 <tr><th>actual completion tokens</th><td>{completion_tokens}</td></tr>
 <tr><th>actual total tokens</th><td>{total_tokens}</td></tr>
+<tr><th>estimated cost</th><td>{usd_display}</td></tr>
 <tr><th>write waste tokens ({basis}-based)</th><td>{waste_tokens}</td></tr>
 <tr><th>levers that would fire</th><td>{levers}</td></tr>
 </table>
@@ -76,6 +96,13 @@ def render_html(
     connection updates the page in place instead, so a periodic full
     reload would just be visual noise."""
     pct = result["save_pct"]
+    usd = result["actual"].get("estimated_usd")
+    pricing = result.get("pricing", {})
+    usd_display = (
+        f"${usd:.4f} (list price as of {html.escape(str(pricing.get('snapshot_date', '?')))}, not your negotiated rate)"
+        if usd is not None
+        else "n/a (no dated pricing for this model)"
+    )
     return _HTML_TEMPLATE.format(
         refresh_tag="" if live else f'<meta http-equiv="refresh" content="{poll_seconds:g}">',
         footer="" if live else f"<p><small>auto-refreshes every {poll_seconds:g}s</small></p>",
@@ -89,6 +116,7 @@ def render_html(
         prompt_tokens=result["actual"]["prompt_tokens"],
         completion_tokens=result["actual"]["completion_tokens"],
         total_tokens=result["actual"]["total_tokens"],
+        usd_display=usd_display,
         basis=html.escape(result["kit_estimate"]["basis"]),
         waste_tokens=result["kit_estimate"]["write_waste_tokens"],
         levers=html.escape(", ".join(result["levers_fired"]) or "(none observed yet)"),

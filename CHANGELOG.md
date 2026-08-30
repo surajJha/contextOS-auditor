@@ -8,6 +8,23 @@ Initial public release candidate. Not yet published to PyPI — install from
 source in the meantime (see README Quickstart).
 
 ### Added
+- **Real $ cost estimate (AUD-011)**: sessions for models in a small,
+  hand-curated, dated pricing snapshot (`_internal/pricing.py`, sourced
+  from litellm's publicly maintained pricing table) now show an
+  estimated `$` figure alongside token counts in `watch`/`watch --serve`/
+  `report`, clearly labeled "list price as of DATE, not your negotiated
+  rate". Unpriced models show "no dated pricing available" rather than a
+  guessed number — the Auditor's honesty-culture rule (never invent a
+  billing figure) still holds, this just widens what counts as "real".
+- Fixed **AUD-018**: the model name is now backfilled from the first real
+  LLM event a framework reports (e.g. CrewAI's
+  `LLMCallCompletedEvent.model`) instead of staying `unknown` for the
+  entire session when no `model_hint` was passed to `attach()`.
+- Fixed **AUD-017/AUD-019**: `watch`/`watch --serve` now poll and wait for
+  a session to appear instead of exiting immediately if the dashboard is
+  opened before the agent run starts (at least as natural an order as the
+  reverse). Plain `watch` also now detects a finished/errored session and
+  stops on its own instead of refreshing forever until Ctrl-C.
 - Free, local-only Agent Auditor (**noncommercial use only** — licensed
   under PolyForm Noncommercial 1.0.0, see LICENSE): attach one line to an
   existing CrewAI / LangGraph / AutoGen / OpenAI Agents SDK agent and

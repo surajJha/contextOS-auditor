@@ -97,6 +97,11 @@ class AuditSession:
                 "output_tokens": int(cost.get("output_tokens") or 0),
                 "cache_read_tokens": int(cost.get("cache_read_tokens") or 0),
                 "cache_write_tokens": int(cost.get("cache_write_tokens") or 0),
+                # AUD-011: dated, sourced $ estimate (see _internal/pricing.py) --
+                # None (not 0) when this session's model has no citable
+                # pricing snapshot, so shadow_kit never silently treats
+                # "unpriced" as "free".
+                "estimated_usd": cost.get("estimated_usd"),
             },
             "tool_calls": slim,
         }
