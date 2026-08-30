@@ -164,6 +164,7 @@ def new_session(
     arm: str = "baseline",
     session_id: str | None = None,
     otel_endpoint: str | None = None,
+    redact_secrets: bool | None = None,
 ) -> FrameworkAuditSession:
     """Convenience constructor -- AutoGen has no single global hook to
     attach to (see module docstring), so the session is built explicitly
@@ -171,7 +172,7 @@ def new_session(
     check_compat("autogen")
     return FrameworkAuditSession(
         framework="autogen", model=model, task=task, out_dir=out_dir,
-        arm=arm, session_id=session_id, otel_endpoint=otel_endpoint,
+        arm=arm, session_id=session_id, otel_endpoint=otel_endpoint, redact_secrets=redact_secrets,
     )
 
 

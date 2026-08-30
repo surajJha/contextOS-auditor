@@ -28,6 +28,7 @@ from contextos_auditor._internal.audit_emit import AuditSession
 from contextos_auditor._internal.dedupe import DedupeGuard
 from contextos_auditor._internal.otel_export import build_exporter
 from contextos_auditor._internal.pricing import estimate_usd
+from contextos_auditor._internal.redact import redact_args, redact_text
 
 # Tool-name aliases the file-write/read detector in shadow_kit.py understands.
 # Framework tool names vary (write_file, WriteFileTool, apply_patch, ...); we
@@ -128,6 +129,7 @@ class FrameworkAuditSession:
         arm: str = "baseline",
         workspace_root: str | Path | None = None,
         otel_endpoint: str | None = None,
+        redact_secrets: bool | None = None,
     ) -> None:
         root = out_dir or (Path.cwd() / ".contextos" / "audit")
         sid = session_id or f"{framework}-{int(time.time() * 1000)}"
@@ -176,6 +178,13 @@ class FrameworkAuditSession:
         # caller pays nothing for this feature's existence.
         endpoint = otel_endpoint or os.environ.get("CONTEXTOS_OTEL_ENDPOINT")
         self._otel = build_exporter(endpoint, framework=framework)
+        # AUD-016: opt-in, pattern-based secret scrub -- see
+        # _internal/redact.py's module docstring for exactly what this
+        # does and does not do (never blanks read/write_file content
+        # wholesale, since that would break the waste-detection feature).
+        if redact_secrets is None:
+            redact_secrets = os.environ.get("CONTEXTOS_REDACT_SECRETS", "") not in ("", "0", "false", "False")
+        self._redact_secrets = redact_secrets
 
     @property
     def session_id(self) -> str:
@@ -205,6 +214,9 @@ class FrameworkAuditSession:
             if path is not None and content is not None:
                 row["args"] = {"path": path, "content": content}
         row["chars"] = len(str(result)) if result is not None else 0
+        if self._redact_secrets:
+            row["args"] = redact_args(row["args"])
+            row["result_text"] = redact_text(row["result_text"])
         with self._lock:
             self._pending_tools.append(row)
 

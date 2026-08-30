@@ -8,6 +8,15 @@ Initial public release candidate. Not yet published to PyPI — install from
 source in the meantime (see README Quickstart).
 
 ### Added
+- **Optional secret-pattern redaction (AUD-016)**: `attach(...,
+  redact_secrets=True)` (or `CONTEXTOS_REDACT_SECRETS=1`) scrubs
+  recognizable secret-shaped substrings (AWS/OpenAI/GitHub/Slack-style
+  keys, JWTs, PEM private keys, generic `api_key=`/`password=`/`token=`
+  assignments) from recorded tool args/results with `[REDACTED]`,
+  replacing only the matched value -- not the whole tool call, so real
+  file content the write-waste detector needs stays intact. Off by
+  default; live-verified that waste detection keeps working correctly
+  with it turned on.
 - **Optional OTel export (AUD-012)**: `pip install contextos-auditor[otel]`
   plus `attach(..., otel_endpoint="http://localhost:4318/v1/traces")` (or
   the `CONTEXTOS_OTEL_ENDPOINT` env var, zero code changes) makes every

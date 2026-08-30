@@ -149,6 +149,28 @@ either way, and if the optional package isn't installed or the endpoint
 is unreachable, export is silently disabled (one `UserWarning`) rather
 than breaking your agent's real run.
 
+## Redacting secrets from recorded tool data (optional)
+
+Tool args/results are recorded to local disk verbatim by default -- this
+is what makes the write-waste detection above possible (it needs the real
+before/after file content). If you want an extra layer of protection
+against an API key, password, or token that happens to show up in a tool
+call's args/result, turn on pattern-based redaction:
+
+```python
+audit = attach(task="...", redact_secrets=True)
+# or: CONTEXTOS_REDACT_SECRETS=1 python your_agent.py
+```
+
+This scrubs recognizable secret *shapes* (AWS keys, OpenAI/GitHub/Slack-
+style tokens, JWTs, PEM private keys, generic `api_key=`/`password=`/
+`token=` assignments) with `[REDACTED]`, replacing only the matched value
+-- **not** the whole tool call, so real file content used for waste
+detection is left intact. This is a best-effort scrub for common secret
+patterns, not a guarantee that no sensitive data of any kind is ever
+recorded — if you need that guarantee, don't pass secrets through tool
+args/results in the first place.
+
 ## Privacy
 
 Session data (`events.jsonl`/`session.json`) is written to a directory on
