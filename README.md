@@ -131,7 +131,7 @@ echo ".contextos/" >> .gitignore
 ## Where this comes from
 
 This package is the public, standalone distribution of the same adapter
-logic used inside the [toku](https://github.com/surajJha/toku) monorepo's
+logic used inside the [toku](internal) or as a standalone [contextos-auditor](https://github.com/surajJha/contextOS-auditor) monorepo's
 `dashboard/adapters/` (which is what the framework-comparison numbers on
 the ContextOS marketing site are measured with) — copied here rather than
 imported, so this package installs and runs with no dependency on that

@@ -34,7 +34,7 @@ dev = ["pytest>=7.0"]
 contextos-auditor = "contextos_auditor.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/surajJha/toku"
+Homepage = "https://github.com/surajJha/contextOS-auditor"
 
 [tool.hatch.build.targets.wheel]
 packages = ["contextos_auditor"]
