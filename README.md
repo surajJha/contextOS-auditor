@@ -101,6 +101,21 @@ Not sure any of this is working? Run `contextos-auditor doctor` first —
 it tells you exactly which framework SDKs it can see and prints the
 correct snippet for each, before you touch your agent code at all.
 
+## Reading the trace
+
+Both the terminal output and the dashboard now show a nested **turn →
+tool call** trace under the summary totals (AUD-013) — not just the
+bottom-line numbers. Each turn lists the tools called during it, and any
+write that would have been smaller with a hunk-based edit is called out
+inline, on the exact turn it happened, in red:
+
+```
+turn 6: 689 tokens (prompt=613 completion=76)
+  +-- write_file
+      L waste detected: write to config/service.yaml could have been
+        29 tokens smaller with a hunk-based edit
+```
+
 ## Viewing past sessions
 
 Every run is written to its own directory under `--audit-root`

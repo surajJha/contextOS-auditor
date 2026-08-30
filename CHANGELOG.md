@@ -8,6 +8,11 @@ Initial public release candidate. Not yet published to PyPI — install from
 source in the meantime (see README Quickstart).
 
 ### Added
+- **Nested turn → tool-call trace (AUD-013)**: `report`/`watch` (terminal
+  and HTML/live dashboard) now render a per-turn breakdown of which tools
+  were called and which write triggered waste detection, instead of only
+  bottom-line totals -- built from data `shadow_session()` already
+  computes, no new instrumentation. Live-verified via screenshot.
 - **`contextos-auditor history` command (AUD-014)**: lists every recorded
   session under `--audit-root`, newest first, with framework/model/status/
   turns/tokens/cost/save% columns, `--limit N` (default 20, `0` = no cap).

@@ -7,6 +7,35 @@ import html
 from typing import Any
 
 
+def _build_trace(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """AUD-013: fold `shadow_session()`'s flat `turns`/`writes` lists into a
+    nested turn -> tool-call span tree, so a multi-turn run reads as a trace
+    instead of only a bottom-line totals table. Every field here already
+    exists in `result` -- this just re-shapes it, no new data collected."""
+    waste_by_turn: dict[Any, list[dict[str, Any]]] = {}
+    for w in result.get("writes") or []:
+        waste_by_turn.setdefault(w.get("turn"), []).append(w)
+
+    trace = []
+    for t in result.get("turns") or []:
+        turn_no = t.get("turn")
+        spans = []
+        for tool_name in t.get("tools") or []:
+            spans.append({"name": tool_name})
+        writes_here = waste_by_turn.get(turn_no) or []
+        trace.append(
+            {
+                "turn": turn_no,
+                "prompt_tokens": t.get("prompt_tokens", 0),
+                "completion_tokens": t.get("completion_tokens", 0),
+                "total_tokens": t.get("total_tokens", 0),
+                "spans": spans,
+                "writes": writes_here,
+            }
+        )
+    return trace
+
+
 def _usd_line(result: dict[str, Any]) -> str | None:
     usd = result["actual"].get("estimated_usd")
     if usd is None:
@@ -39,8 +68,24 @@ def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any
         f"kit estimate: waste_tokens={kit['write_waste_tokens']} ({kit['basis']}-based)",
         f"estimated savings if Kit were attached: {result['save_pct']:+.1f}%",
         f"levers that would fire: {', '.join(result['levers_fired']) or '(none observed yet)'}",
-        f"-- {result['disclaimer']}",
     ]
+    trace = _build_trace(result)
+    if trace:
+        lines.append("")
+        lines.append("trace (turn -> tool calls):")
+        for span in trace:
+            lines.append(
+                f"  turn {span['turn']}: {span['total_tokens']} tokens "
+                f"(prompt={span['prompt_tokens']} completion={span['completion_tokens']})"
+            )
+            for tool in span["spans"]:
+                lines.append(f"    +-- {tool['name']}")
+            for w in span["writes"]:
+                lines.append(
+                    f"        L waste detected: write to {w['path']} "
+                    f"could have been {w['waste_tokens']} tokens smaller with a hunk-based edit"
+                )
+    lines.append(f"-- {result['disclaimer']}")
     return "\n".join(lines)
 
 
@@ -122,6 +167,36 @@ th {{ text-align: left; font-weight: 500; color: var(--text-dim); }}
 td {{ color: var(--text); }}
 .disclaimer {{ font-size: 0.8rem; color: var(--text-dimmer); max-width: 560px; }}
 a {{ color: var(--accent); }}
+details.trace {{
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  margin: 0 0 1.5rem;
+  padding: 0.9rem 1.1rem;
+}}
+details.trace > summary {{
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}}
+.trace-turn {{ margin: 0.9rem 0 0 0; }}
+.trace-turn-head {{
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--text);
+}}
+.trace-spans {{ list-style: none; margin: 0.35rem 0 0; padding: 0; }}
+.trace-spans li {{
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  padding: 0.15rem 0 0.15rem 1.2rem;
+  border-left: 1px solid var(--panel-border);
+  margin-left: 0.3rem;
+}}
+.trace-spans li.waste {{ color: var(--neg); }}
 </style>
 </head>
 <body>
@@ -139,12 +214,47 @@ a {{ color: var(--accent); }}
 <tr><th>write waste tokens ({basis}-based)</th><td>{waste_tokens}</td></tr>
 <tr><th>levers that would fire</th><td>{levers}</td></tr>
 </table>
+{trace_html}
 <p class="disclaimer">{disclaimer}</p>
 {footer}
 </div>
 </body>
 </html>
 """
+
+
+def _trace_html(result: dict[str, Any]) -> str:
+    """AUD-013: nested turn -> tool-call trace, rendered as a native
+    <details>/<summary> tree (no JS needed, works in the static --html
+    export too)."""
+    trace = _build_trace(result)
+    if not trace:
+        return ""
+    turns_html = []
+    for span in trace:
+        spans_html = "".join(
+            f'<li>{html.escape(str(t["name"]))}</li>' for t in span["spans"]
+        )
+        for w in span["writes"]:
+            spans_html += (
+                f'<li class="waste">waste detected: write to '
+                f'{html.escape(str(w["path"]))} could have been '
+                f'{w["waste_tokens"]} tokens smaller with a hunk-based edit</li>'
+            )
+        turns_html.append(
+            f'<div class="trace-turn">'
+            f'<div class="trace-turn-head">turn {html.escape(str(span["turn"]))} '
+            f'&middot; {span["total_tokens"]} tokens '
+            f'(prompt={span["prompt_tokens"]} completion={span["completion_tokens"]})</div>'
+            f'<ul class="trace-spans">{spans_html or "<li>(no tool calls)</li>"}</ul>'
+            f"</div>"
+        )
+    return (
+        '<details class="trace" open>'
+        "<summary>Trace (turn &rarr; tool calls)</summary>"
+        + "".join(turns_html)
+        + "</details>"
+    )
 
 
 def render_html(
@@ -185,6 +295,7 @@ def render_html(
         basis=html.escape(result["kit_estimate"]["basis"]),
         waste_tokens=result["kit_estimate"]["write_waste_tokens"],
         levers=html.escape(", ".join(result["levers_fired"]) or "(none observed yet)"),
+        trace_html=_trace_html(result),
         disclaimer=html.escape(result["disclaimer"]),
         poll_seconds=poll_seconds,
     )
