@@ -200,6 +200,14 @@ class FrameworkAuditSession:
     @guarded("FrameworkAuditSession.record_llm")
     def record_llm(self, usage: dict[str, Any] | None, model: str | None = None) -> None:
         """Flush buffered tool calls together with this LLM call's usage."""
+        # Most adapters don't know the real model name until the first LLM
+        # call actually returns one (e.g. CrewAI's LLMCallCompletedEvent.model)
+        # -- construction time only has whatever model_hint the caller passed,
+        # which defaults to "unknown". Backfill it here so `watch`/the
+        # dashboard show the real model instead of "unknown" for the entire
+        # session's lifetime.
+        if model and self._session.model in (None, "unknown"):
+            self._session.model = model
         usage = usage or {}
         prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
         completion = int(
