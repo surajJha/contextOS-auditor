@@ -68,19 +68,23 @@ crew (support triage → reply writer → config-file maintainer). Shows:
 
 ## Known, disclosed limitations (say these proactively, don't wait to be asked)
 
-- Install today is `pip install git+https://github.com/...` — **not
-  yet on PyPI**. This is real friction for a PH launch day; either
-  publish to PyPI before launching, or say so plainly in the post so
-  it isn't a surprise mid-thread.
 - $ cost is list price from a dated public snapshot, not your
   negotiated enterprise rate.
 - Waste/savings numbers are token-count-based estimates, not a
-  guarantee — the tool never claims to change your bill.
+  guarantee — the tool never claims to change your bill. They are an
+  **upper bound**: the trace cannot show whether your provider billed a
+  cached prefix at a discount, and it cannot model how the agent's
+  trajectory would have changed if the waste were removed.
 - 4 frameworks supported today (CrewAI, LangGraph, AutoGen, OpenAI
   Agents SDK) — no framework support beyond that at launch.
+- PolyForm Shield is **source-available, not OSI open source**. Free for
+  any use including commercial use inside your company; the only
+  restriction is building a competing product. Don't call it open source.
+- `contextos-optimiser` (the paid SDK that removes the waste) is not
+  publicly installable — it's private release, access by email.
 
 ## Decision (resolved)
 
-Launching with the `pip install git+https://github.com/...` command as-is.
-PyPI publish is a fast-follow, not a launch blocker. Say so plainly in
-the first comment / FAQ if asked, rather than waiting to be called out.
+Published to PyPI as 0.1.0 on 2026-09-04, so install is now plain
+`pip install contextos-auditor`. The earlier plan to launch on a
+`git+https://` install is obsolete — that friction is gone.

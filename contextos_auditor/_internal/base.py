@@ -135,11 +135,13 @@ def _announce_capture(session_dir: Path, redacting: bool) -> None:
     _announced = True
     scrub = "secret-pattern redaction ON" if redacting else "secret-pattern redaction OFF"
     try:
-        rel: str = str(Path(session_dir).relative_to(Path.cwd()))
+        rel: str = "./" + str(Path(session_dir).relative_to(Path.cwd()))
     except ValueError:
+        # Session dir lives outside the cwd (e.g. an explicit --audit-root).
+        # Prefixing "./" there would print a nonsense path like `.//tmp/x`.
         rel = str(session_dir)
     print(
-        f"[contextos-auditor] recording this run to ./{rel} ({scrub}).\n"
+        f"[contextos-auditor] recording this run to {rel} ({scrub}).\n"
         f"[contextos-auditor] nothing leaves your machine. add '.contextos/' to .gitignore.",
         file=sys.stderr,
     )

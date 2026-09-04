@@ -2,10 +2,41 @@
 
 All notable changes to `contextos-auditor` are documented here.
 
-## [0.1.0] — unreleased (pre-PyPI)
+## [0.1.1] — 2026-09-04
 
-Initial public release candidate. Not yet published to PyPI — install from
-source in the meantime (see README Quickstart).
+### Fixed
+- **LangGraph adapter could silently drop a whole turn (LNCH-008)**:
+  `AuditorCallback._extract_usage` caught only `AttributeError`/`IndexError`/
+  `TypeError`, so a usage object that wasn't a mapping raised `ValueError`
+  out of `dict(usage_metadata)`. `on_llm_end`'s guard then swallowed the
+  entire call, so the turn was never emitted — which both shrank the turn
+  count *and* re-attributed that turn's buffered tool calls to the next
+  turn, corrupting the trace rather than merely shortening it. An
+  unrecognised usage shape now degrades to zeros (a visible "no tokens
+  seen") while the turn and its tool attribution stay correct.
+- **`contextos-auditor demo` doubled its own numbers on a second run**: the
+  demo writes to a fixed session id but never cleared it, so re-running
+  appended to the previous session. Turns, waste and duplicate reads all
+  doubled and the headline percentage was fabricated. The session is now
+  reset before each run.
+- **First-run notice printed a malformed path** (`.//tmp/x`) when the audit
+  root sat outside the working directory.
+
+### Changed
+- The conversion CTA no longer prints `pip install contextos-optimiser`.
+  The optimiser is in private release and that command does not resolve;
+  it now points to email for access.
+
+### Added
+- 49 adapter-level tests covering LangGraph, OpenAI Agents SDK and AutoGen
+  (previously only CrewAI had them), driven by import-time stubs so the
+  suite still runs on a bare `pip install pytest` and the package keeps its
+  zero-dependency guarantee.
+- Animated dashboard demo in the README.
+
+## [0.1.0] — 2026-09-04
+
+First release published to PyPI: `pip install contextos-auditor`.
 
 ### Added
 - **Nested turn → tool-call trace (AUD-013)**: `report`/`watch` (terminal

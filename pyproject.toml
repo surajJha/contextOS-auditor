@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "contextos-auditor"
-version = "0.1.0"
+version = "0.1.1"
 description = "The free, local-only Agent Auditor -- attach one line to a CrewAI/LangGraph/AutoGen/OpenAI-Agents-SDK agent and watch its real token cost live. No signup, no telemetry, no data leaves your machine. Free for any use including commercial (PolyForm Shield, noncompete only) -- see LICENSE."
 readme = "README.md"
 license = { file = "LICENSE" }

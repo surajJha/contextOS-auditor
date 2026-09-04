@@ -22,7 +22,10 @@
     var start = performance.now();
     var duration = 1200;
     function step(now) {
-      var t = Math.min(1, (now - start) / duration);
+      // rAF hands back the frame's timestamp, which can be *earlier* than the
+      // performance.now() that scheduled it. Unclamped, the first frame yields
+      // a negative t and the counter briefly renders a negative percentage.
+      var t = Math.max(0, Math.min(1, (now - start) / duration));
       var eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       el.textContent = "+" + (target * eased).toFixed(1) + "%";
       if (t < 1) requestAnimationFrame(step);
@@ -247,7 +250,7 @@
   if (eyebrowEl && !reduceMotion) {
     var messages = [
       "Live API calls, real tokens, ground-truth verified",
-      "+53.2% cost-weighted on LangGraph",
+      "+53.4% cost-weighted on LangGraph",
       "+43.4% cost-weighted on CrewAI",
       "+56.7% cost-weighted on OpenAI Agents SDK",
       "+54.8% cost-weighted on AutoGen",
@@ -359,7 +362,7 @@
           monGaugeFill.style.strokeDashoffset = offset;
           var start = performance.now();
           function tick(now) {
-            var t = Math.min(1, (now - start) / 900);
+            var t = Math.max(0, Math.min(1, (now - start) / 900));
             monGaugePct.textContent = (session.savings * t).toFixed(1) + "%";
             if (t < 1) requestAnimationFrame(tick);
           }

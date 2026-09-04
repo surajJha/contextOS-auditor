@@ -107,6 +107,7 @@ nav.top .wrap {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 24px;
   height: 88px;
 }
 
@@ -118,6 +119,11 @@ nav.top .wrap {
   font-size: 19px;
   letter-spacing: -0.01em;
   text-decoration: none;
+  /* The brand and the CTAs are fixed points; only the link list may
+     absorb leftover space. Without this the whole row shrinks until the
+     wordmark collides with the first nav link. */
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .brand .mark {
@@ -133,15 +139,25 @@ nav.top .wrap {
 nav.top ul {
   list-style: none;
   display: flex;
-  gap: 32px;
+  /* Fluid gap: 8 links plus a wordmark plus two buttons do not fit at a
+     fixed 32px gap on a 1320px container -- the list used to shrink until
+     "How it works" wrapped onto two lines, throwing every other item off
+     the shared baseline. */
+  gap: clamp(12px, 1.6vw, 28px);
+  justify-content: center;
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   padding: 0;
-  font-size: 15.5px;
+  font-size: 15px;
 }
+
+nav.top ul li { white-space: nowrap; }
 
 nav.top ul a {
   color: var(--text-dim);
   text-decoration: none;
+  white-space: nowrap;
   transition: color 0.15s ease;
 }
 
@@ -151,6 +167,7 @@ nav.top ul a:hover { color: var(--text); }
   display: flex;
   gap: 10px;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 /* ---------- buttons ---------- */
@@ -1453,6 +1470,20 @@ footer .foot-links a:hover { color: var(--text); }
 }
 
 /* ---------- responsive ---------- */
+
+/* The nav is the first thing to run out of room. Shed the lowest-value
+   elements in order -- secondary CTA first, then the two links whose
+   sections are reachable from the hero anyway -- so the row never has to
+   wrap or crowd the wordmark. */
+@media (max-width: 1240px) {
+  nav.top .nav-cta .btn-ghost { display: none; }
+}
+
+@media (max-width: 1080px) {
+  /* 1 = "Why", 2 = "Product" */
+  nav.top ul li:nth-child(1),
+  nav.top ul li:nth-child(2) { display: none; }
+}
 
 @media (max-width: 900px) {
   .grid-3, .grid-2, .fw-strip, .headline-cards { grid-template-columns: 1fr; }

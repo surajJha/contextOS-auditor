@@ -139,10 +139,23 @@ class AuditorCallback(BaseCallbackHandler):
             model = (getattr(message, "response_metadata", None) or {}).get("model_name")
             if usage_metadata:
                 return dict(usage_metadata), model
-        except (AttributeError, IndexError, TypeError):
+        # LNCH-008: an unrecognised usage shape must degrade to "this turn
+        # reported no tokens" (zeros), never to "this turn never happened".
+        # The narrower `except (AttributeError, IndexError, TypeError)` let
+        # e.g. a non-mapping usage_metadata escape as a ValueError from
+        # `dict(...)`; `on_llm_end`'s @guarded then swallowed the whole
+        # call, so the turn was never emitted at all -- which silently
+        # drops a turn from the count *and* re-attributes its buffered tool
+        # calls to the next turn. Under-reporting the token number is a
+        # visible zero; losing a turn is an invisible measurement error.
+        except Exception:  # noqa: BLE001 -- intentional, see above
             pass
         llm_output = getattr(response, "llm_output", None) or {}
+        if not isinstance(llm_output, dict):
+            llm_output = {}
         token_usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
+        if not isinstance(token_usage, dict):
+            token_usage = {}
         return dict(token_usage), llm_output.get("model_name") or model
 
     def finish(self, *, success: bool | None = None, error: str = "") -> None:
