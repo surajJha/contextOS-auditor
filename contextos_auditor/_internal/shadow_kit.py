@@ -141,6 +141,7 @@ def shadow_session(events: list[dict]) -> dict:
     """Fold an events.jsonl-shaped list into actual vs Kit opportunity totals."""
     file_state: dict[str, str] = {}
     writes: list[dict] = []
+    dupes: list[dict] = []
     turns: list[dict] = []
     actual_nano = 0
     actual_prompt = 0
@@ -188,7 +189,22 @@ def shadow_session(events: list[dict]) -> dict:
                     # Prefer explicit content captured on the event; else keep prior.
                     content = t.get("result_text")
                     if isinstance(content, str):
-                        file_state[str(args["path"])] = content
+                        path = str(args["path"])
+                        # A re-read of content already in the transcript is
+                        # pure duplicate spend: it buys no new information
+                        # and is re-sent as prompt tokens on every turn that
+                        # follows. Record it here; the per-turn multiplier
+                        # can only be applied once we know how many turns
+                        # the session actually ran.
+                        if file_state.get(path) == content and content:
+                            dupes.append(
+                                {
+                                    "turn": ev.get("turn"),
+                                    "path": path,
+                                    "tokens": tk.count_text(content),
+                                }
+                            )
+                        file_state[path] = content
                 if name == "write_file" and args.get("path") is not None:
                     path = str(args["path"])
                     new_text = str(args.get("content") or "")
@@ -202,6 +218,32 @@ def shadow_session(events: list[dict]) -> dict:
                         }
                     )
                     file_state[path] = new_text
+
+    # Duplicate-context waste. A redundant read of N tokens landing on turn
+    # T is re-sent in the prompt of every later turn, so its true cost is
+    # N x (number of turns it was carried through), not N. This is the
+    # dominant waste category in real ReAct loops -- counting only
+    # write-hunk waste understates the opportunity by an order of
+    # magnitude, which makes the free auditor's number irreconcilable with
+    # the measured savings the paid tool actually delivers.
+    #
+    # Two deliberate conservatism guards:
+    #   1. Providers with prompt caching bill repeated prefixes at a
+    #      discount, so on those this over-states. We do not know from the
+    #      trace whether caching was active.
+    #   2. The total is clamped to observed prompt tokens, so the estimate
+    #      can never claim more waste than the session demonstrably spent.
+    last_turn = max((int(t.get("turn") or 0) for t in turns), default=0)
+    dup_waste_tokens = 0
+    for d in dupes:
+        carried = max(1, last_turn - int(d.get("turn") or 0) + 1)
+        d["turns_carried"] = carried
+        d["waste_tokens"] = int(d["tokens"]) * carried
+        dup_waste_tokens += d["waste_tokens"]
+    dup_waste_tokens = min(dup_waste_tokens, actual_prompt)
+
+    write_waste_tokens = waste_tokens
+    waste_tokens = write_waste_tokens + dup_waste_tokens
 
     cost_per_token = (
         actual_nano / actual_total_tokens if actual_total_tokens else 0.0
@@ -243,12 +285,15 @@ def shadow_session(events: list[dict]) -> dict:
         },
         "kit_estimate": {
             "total_nano_aiu": kit_nano,
-            "write_waste_tokens": waste_tokens,
+            "write_waste_tokens": write_waste_tokens,
+            "duplicate_context_waste_tokens": dup_waste_tokens,
+            "waste_tokens": waste_tokens,
             "label": "estimated",
             "basis": basis,
         },
         "save_pct": round(save_pct, 1),
         "writes": writes,
+        "duplicate_reads": dupes,
         "turns": turns,
         "levers_fired": sorted(levers_fired),
         "disclaimer": (

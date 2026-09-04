@@ -54,8 +54,9 @@ source in the meantime (see README Quickstart).
   opened before the agent run starts (at least as natural an order as the
   reverse). Plain `watch` also now detects a finished/errored session and
   stops on its own instead of refreshing forever until Ctrl-C.
-- Free, local-only Agent Auditor (**noncommercial use only** — licensed
-  under PolyForm Noncommercial 1.0.0, see LICENSE): attach one line to an
+- Free, local-only Agent Auditor (**free for any use, commercial included
+  — licensed under PolyForm Shield 1.0.0, noncompete only, see LICENSE**):
+  attach one line to an
   existing CrewAI / LangGraph / AutoGen / OpenAI Agents SDK agent and
   watch its real token cost live. No signup, no telemetry, no data leaves
   the machine it runs on.

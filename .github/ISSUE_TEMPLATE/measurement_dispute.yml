@@ -1,0 +1,40 @@
+name: Wrong numbers / measurement dispute
+description: The savings, waste or cost figure does not match what you believe is true.
+labels: ["measurement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most important kind of issue you can file. The whole point of
+        this tool is that its numbers are defensible, so a number we cannot
+        justify is a bug in the product, not a misunderstanding on your part.
+
+        Useful context before you write: the auditor reports an **upper bound**
+        on recoverable waste. It cannot see whether your provider billed a cached
+        prefix at a discount, and it cannot model how the agent's trajectory
+        would have changed if the waste were removed.
+
+  - type: textarea
+    id: number
+    attributes:
+      label: Which number, and what it said
+      placeholder: "It reported +42% savings, but our actual bill only moved 3%."
+    validations:
+      required: true
+
+  - type: textarea
+    id: why-wrong
+    attributes:
+      label: Why you think it is wrong
+      description: Billing data, a manual token count, or a reasoned argument all work.
+    validations:
+      required: true
+
+  - type: textarea
+    id: export
+    attributes:
+      label: Exported JSON (optional, please redact)
+      description: |
+        The HTML report has a "Download JSON" button. It contains tool names,
+        file paths and token counts. Redact anything sensitive before pasting.
+      render: json

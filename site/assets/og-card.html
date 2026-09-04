@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; }
+  body {
+    background: #05070d;
+    color: #e7ebf5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 76px;
+  }
+  .blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: 0.5;
+  }
+  .b1 { width: 620px; height: 620px; background: #7c5cff; top: -280px; right: -160px; }
+  .b2 { width: 520px; height: 520px; background: #35e2c4; bottom: -300px; left: -140px; opacity: 0.32; }
+  .inner { position: relative; z-index: 2; }
+  .brand {
+    display: flex; align-items: center; gap: 14px;
+    font-size: 27px; font-weight: 700; letter-spacing: -0.01em;
+    margin-bottom: 34px;
+  }
+  h1 {
+    font-size: 68px; line-height: 1.06; font-weight: 700;
+    letter-spacing: -0.033em; max-width: 940px;
+  }
+  h1 .g {
+    background: linear-gradient(100deg, #7c5cff, #35e2c4);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  p.sub {
+    margin-top: 26px; font-size: 25px; line-height: 1.45;
+    color: #8792a8; max-width: 860px;
+  }
+  .stats { display: flex; gap: 54px; margin-top: 46px; }
+  .stat .n {
+    font-size: 43px; font-weight: 700; color: #35e2c4; letter-spacing: -0.02em;
+  }
+  .stat .l {
+    font-size: 15px; color: #5b6478; margin-top: 5px;
+    text-transform: uppercase; letter-spacing: 0.09em; font-weight: 600;
+  }
+  .rule {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 6px;
+    background: linear-gradient(90deg, #7c5cff, #35e2c4);
+  }
+</style>
+</head>
+<body>
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="inner">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="38" height="38">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#7c5cff" />
+            <stop offset="1" stop-color="#35e2c4" />
+          </linearGradient>
+        </defs>
+        <circle cx="16" cy="16" r="12.5" fill="none" stroke="url(#g)" stroke-width="2.6"
+                stroke-dasharray="66 14" stroke-linecap="round" transform="rotate(-40 16 16)" />
+        <circle cx="16" cy="16" r="4.2" fill="url(#g)" />
+      </svg>
+      ContextOS
+    </div>
+    <h1>Stop paying for tokens<br />your agent <span class="g">didn't need</span>.</h1>
+    <p class="sub">Measure the waste in your own agent for free. Then remove it.</p>
+    <div class="stats">
+      <div class="stat"><div class="n">+53.4%</div><div class="l">LangGraph</div></div>
+      <div class="stat"><div class="n">+54.8%</div><div class="l">CrewAI</div></div>
+      <div class="stat"><div class="n">+56.7%</div><div class="l">AutoGen</div></div>
+      <div class="stat"><div class="n">+43.4%</div><div class="l">OpenAI Agents</div></div>
+    </div>
+  </div>
+  <div class="rule"></div>
+</body>
+</html>

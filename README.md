@@ -1,14 +1,32 @@
 # contextos-auditor
 
-The free (noncommercial-use), local-only Agent Auditor. Attach one line to
+[![PyPI](https://img.shields.io/pypi/v/contextos-auditor.svg)](https://pypi.org/project/contextos-auditor/)
+[![Python](https://img.shields.io/pypi/pyversions/contextos-auditor.svg)](https://pypi.org/project/contextos-auditor/)
+[![License: PolyForm Shield](https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue.svg)](./LICENSE)
+
+The free, local-only Agent Auditor. Attach one line to
 an existing CrewAI / LangGraph / AutoGen / OpenAI Agents SDK agent and
 watch its real token cost live — no code changes to your tools/prompts,
 no signup, no telemetry, **no data ever leaves your machine**. Licensed
-[PolyForm Noncommercial](./LICENSE) — free to run and modify for
-noncommercial use; commercial use needs a separate license.
+[PolyForm Shield](./LICENSE) — free for **any** use, including commercial
+use inside your company; the only restriction is that you can't use it to
+build a competing product.
+
+```bash
+pip install contextos-auditor        # no extras needed to look around
+contextos-auditor demo --serve       # see it work, no agent required
+```
+
+That runs a synthetic session through the real analysis and opens the
+dashboard on `127.0.0.1` — no agent, no API key, no network, nothing
+written outside the current directory. It's the fastest way to see what
+this actually produces before wiring it into anything.
+
+When you're ready to point it at your own agent:
 
 ```bash
 pip install contextos-auditor[crewai]        # or [langgraph] / [autogen] / [openai-agents] / [all]
+contextos-auditor doctor                     # prints the one-line snippet for your framework
 ```
 
 Requires Python >= 3.10. Zero required runtime dependencies — every
@@ -140,10 +158,26 @@ reporting (CrewAI's `LLMCallCompletedEvent.usage`, LangChain's
 AutoGen's `ChatCompletionClient.create()` return value) — never a
 heuristic or an extra network call. The "savings if Kit were attached"
 figure is a **local, offline estimate** computed from your own recorded
-tool calls (specifically: how much smaller a hunk-based edit would have
-been than the full-file write your agent actually sent) — it does not
-change your bill, and it is clearly labeled `estimated` everywhere it
-appears, never presented as a measured result.
+tool calls — it does not change your bill, and it is clearly labeled
+`estimated` everywhere it appears, never presented as a measured result.
+
+Two kinds of waste are counted, and both are shown with the arithmetic
+that produced them, so you can check the headline rather than trust it:
+
+1. **Whole-file rewrites.** Your agent sent an entire file to change a
+   few lines. The waste is the size of the full write minus the size of
+   the equivalent hunk-based edit.
+2. **Duplicate context.** Your agent re-read content it was already
+   carrying in the transcript. That content is billed again in the prompt
+   of *every* turn that follows it, so the waste is its size multiplied
+   by the number of turns it was carried through. In long ReAct loops
+   this is usually the larger of the two.
+
+The duplicate-context figure is an **upper bound** on providers that bill
+repeated prompt prefixes at a cached-token discount — the trace doesn't
+tell us whether caching was active for your run. The total is also
+clamped to the prompt tokens the session actually spent, so the estimate
+can never claim more waste than the run demonstrably paid for.
 
 **$ cost** is shown alongside token counts when your session's model is
 in a small, hand-curated, dated pricing snapshot
@@ -180,36 +214,44 @@ either way, and if the optional package isn't installed or the endpoint
 is unreachable, export is silently disabled (one `UserWarning`) rather
 than breaking your agent's real run.
 
-## Redacting secrets from recorded tool data (optional)
+## Secret redaction (on by default)
 
-Tool args/results are recorded to local disk verbatim by default -- this
-is what makes the write-waste detection above possible (it needs the real
-before/after file content). If you want an extra layer of protection
-against an API key, password, or token that happens to show up in a tool
-call's args/result, turn on pattern-based redaction:
+Pattern-based secret redaction is **on by default**. Recognizable secret
+*shapes* (AWS keys, OpenAI/GitHub/Slack-style tokens, JWTs, PEM private
+keys, and generic credential assignments) are replaced with `[REDACTED]`
+before anything is written to disk. Only the matched value is replaced --
+**not** the whole tool call -- so the real file content that powers
+write-waste detection is left intact.
+
+It defaults on because the two failure modes aren't symmetric: a
+credential written into a plaintext file (and possibly committed) can't be
+un-written, whereas the cost of redaction being on is only that a
+credential-shaped string reads as `[REDACTED]` in the trace view.
+
+If you need the raw values -- e.g. you're debugging the auditor itself, on
+data you know is safe:
 
 ```python
-audit = attach(task="...", redact_secrets=True)
-# or: CONTEXTOS_REDACT_SECRETS=1 python your_agent.py
+audit = attach(task="...", redact_secrets=False)
+# or: CONTEXTOS_REDACT_SECRETS=0 python your_agent.py
 ```
 
-This scrubs recognizable secret *shapes* (AWS keys, OpenAI/GitHub/Slack-
-style tokens, JWTs, PEM private keys, generic `api_key=`/`password=`/
-`token=` assignments) with `[REDACTED]`, replacing only the matched value
--- **not** the whole tool call, so real file content used for waste
-detection is left intact. This is a best-effort scrub for common secret
-patterns, not a guarantee that no sensitive data of any kind is ever
-recorded — if you need that guarantee, don't pass secrets through tool
-args/results in the first place.
+This is a best-effort scrub for common secret patterns, not a guarantee
+that no sensitive data of any kind is ever recorded -- if you need that
+guarantee, don't pass secrets through tool args/results in the first
+place.
 
 ## Privacy
 
 Session data (`events.jsonl`/`session.json`) is written to a directory on
 your own disk (`./.contextos/audit/<session-id>/` by default) and never
-transmitted anywhere by this package. `contextos-auditor watch --serve`
-binds a small local HTTP server to `127.0.0.1` only — it is never
-reachable from outside your machine, and the process makes zero outbound
-network calls (see `tests/test_no_network_calls.py`).
+transmitted anywhere by this package. On the first `attach()` in a
+process the auditor prints the exact path it is writing to and whether
+redaction is on, so this is never a surprise (set `CONTEXTOS_QUIET=1` to
+silence it in CI). `contextos-auditor watch --serve` binds a small local
+HTTP server to `127.0.0.1` only -- it is never reachable from outside your
+machine, and the process makes zero outbound network calls (see
+`tests/test_no_network_calls.py`).
 
 Tool calls are recorded with their real arguments and results (e.g. file
 paths and contents your agent read/wrote) so the savings estimate can be
@@ -240,9 +282,11 @@ pytest tests/
 
 ## License
 
-**Noncommercial use only.** Licensed under
-[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) —
-see [`LICENSE`](./LICENSE). You're free to run this on your own agents,
-inspect it, and modify it for any noncommercial purpose (personal projects,
-research, evaluation). Commercial use requires a separate license — reach
-out if that's you.
+**Free for any use, including commercial.** Licensed under
+[PolyForm Shield 1.0.0](https://polyformproject.org/licenses/shield/1.0.0) —
+see [`LICENSE`](./LICENSE). Run it on your company's agents, inspect it,
+fork it, modify it, ship it inside your product — no fee, no signup, no
+commercial license to buy. The single restriction is **Noncompete**: you
+may not use it to provide a product that competes with ContextOS. It is
+source-available rather than OSI open source for exactly that reason, and
+we'd rather say so plainly than blur the term.

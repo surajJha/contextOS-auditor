@@ -18,6 +18,7 @@ shape `contextos_auditor._internal.audit_emit` understands, so
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 import warnings
@@ -115,6 +116,35 @@ def _extract_write_content(args: dict[str, Any]) -> str | None:
     return None
 
 
+_announced = False
+
+
+def _announce_capture(session_dir: Path, redacting: bool) -> None:
+    """Tell the user, once per process, what is being written to disk.
+
+    Silence here is the wrong default: this records real tool args and
+    results (including file contents) into a plaintext file under the
+    user's cwd, and someone who never scrolled to the README's Privacy
+    section could commit that. Printing the exact path once costs two
+    lines of stderr and removes the surprise. Honour CONTEXTOS_QUIET=1 for
+    scripted/CI use.
+    """
+    global _announced
+    if _announced or os.environ.get("CONTEXTOS_QUIET", "") not in ("", "0", "false", "False"):
+        return
+    _announced = True
+    scrub = "secret-pattern redaction ON" if redacting else "secret-pattern redaction OFF"
+    try:
+        rel: str = str(Path(session_dir).relative_to(Path.cwd()))
+    except ValueError:
+        rel = str(session_dir)
+    print(
+        f"[contextos-auditor] recording this run to ./{rel} ({scrub}).\n"
+        f"[contextos-auditor] nothing leaves your machine. add '.contextos/' to .gitignore.",
+        file=sys.stderr,
+    )
+
+
 class FrameworkAuditSession:
     """Thin wrapper an adapter calls; keeps each adapter file tiny."""
 
@@ -178,13 +208,15 @@ class FrameworkAuditSession:
         # caller pays nothing for this feature's existence.
         endpoint = otel_endpoint or os.environ.get("CONTEXTOS_OTEL_ENDPOINT")
         self._otel = build_exporter(endpoint, framework=framework)
-        # AUD-016: opt-in, pattern-based secret scrub -- see
-        # _internal/redact.py's module docstring for exactly what this
+        # AUD-016 / LNCH-004: pattern-based secret scrub, ON BY DEFAULT --
+        # see _internal/redact.py's module docstring for exactly what this
         # does and does not do (never blanks read/write_file content
         # wholesale, since that would break the waste-detection feature).
+        # Explicit False, or CONTEXTOS_REDACT_SECRETS=0, opts out.
         if redact_secrets is None:
-            redact_secrets = os.environ.get("CONTEXTOS_REDACT_SECRETS", "") not in ("", "0", "false", "False")
+            redact_secrets = os.environ.get("CONTEXTOS_REDACT_SECRETS", "1") not in ("0", "false", "False", "no", "off")
         self._redact_secrets = redact_secrets
+        _announce_capture(self._session.dir, redact_secrets)
 
     @property
     def session_id(self) -> str:

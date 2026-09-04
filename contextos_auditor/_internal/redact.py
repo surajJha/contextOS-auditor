@@ -21,7 +21,12 @@ never does that. It is a best-effort scrub for common secret *shapes*, not
 a guarantee that no sensitive data of any kind is ever recorded -- say this
 plainly in docs/FAQ rather than overclaiming.
 
-Opt-in: `attach(..., redact_secrets=True)` or `CONTEXTOS_REDACT_SECRETS=1`.
+Default: **on**. Pass `redact_secrets=False` or set
+`CONTEXTOS_REDACT_SECRETS=0` to record raw values instead. This defaults
+on because the failure mode of the other default is unrecoverable -- a
+credential written into a plaintext file on disk (and possibly committed)
+cannot be un-written -- while the cost of it being on is only that a
+credential-shaped substring reads as `[REDACTED]` in the trace view.
 """
 
 from __future__ import annotations

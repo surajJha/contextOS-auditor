@@ -33,13 +33,37 @@ def test_redact_text_leaves_ordinary_content_untouched():
     assert redact_text(text) == text
 
 
-def test_redaction_off_by_default(tmp_path):
+def test_redaction_on_by_default(tmp_path):
+    """LNCH-004: safe-by-default. A secret-shaped arg must never reach disk
+    unless the user explicitly asked for raw capture."""
     session = FrameworkAuditSession(framework="crewai", model="gpt-5-mini", task="t", out_dir=tmp_path)
     session.record_tool("lookup_account", {"customer_id": "sk-abcdefghijklmnopqrstuvwxyz123456"}, "ok")
     session.record_llm({"prompt_tokens": 1, "completion_tokens": 1}, "gpt-5-mini")
     session.finish(success=True)
     events = (tmp_path / session.session_id / "events.jsonl").read_text()
-    assert "sk-abcdefghijklmnopqrstuvwxyz123456" in events  # unredacted: opt-in, default off
+    assert "sk-abcdefghijklmnopqrstuvwxyz123456" not in events
+    assert "[REDACTED]" in events
+
+
+def test_redaction_can_be_opted_out_explicitly(tmp_path):
+    session = FrameworkAuditSession(
+        framework="crewai", model="gpt-5-mini", task="t", out_dir=tmp_path, redact_secrets=False,
+    )
+    session.record_tool("lookup_account", {"customer_id": "sk-abcdefghijklmnopqrstuvwxyz123456"}, "ok")
+    session.record_llm({"prompt_tokens": 1, "completion_tokens": 1}, "gpt-5-mini")
+    session.finish(success=True)
+    events = (tmp_path / session.session_id / "events.jsonl").read_text()
+    assert "sk-abcdefghijklmnopqrstuvwxyz123456" in events
+
+
+def test_redaction_can_be_opted_out_by_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONTEXTOS_REDACT_SECRETS", "0")
+    session = FrameworkAuditSession(framework="crewai", model="gpt-5-mini", task="t", out_dir=tmp_path)
+    session.record_tool("lookup_account", {"customer_id": "sk-abcdefghijklmnopqrstuvwxyz123456"}, "ok")
+    session.record_llm({"prompt_tokens": 1, "completion_tokens": 1}, "gpt-5-mini")
+    session.finish(success=True)
+    events = (tmp_path / session.session_id / "events.jsonl").read_text()
+    assert "sk-abcdefghijklmnopqrstuvwxyz123456" in events
 
 
 def test_redaction_on_scrubs_persisted_tool_args_and_result(tmp_path):

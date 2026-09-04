@@ -1,5 +1,9 @@
 """contextos-auditor CLI.
 
+    contextos-auditor demo                   # synthetic session, no agent
+                                              # or API key required -- the
+                                              # fastest way to see output
+    contextos-auditor demo --serve           # ...in the localhost dashboard
     contextos-auditor watch                 # live terminal table, auto-picks
                                               # the most recently-written
                                               # session under ./.contextos/audit
@@ -91,8 +95,25 @@ def _wait_for_session_dir(args: argparse.Namespace, poll_seconds: float = 1.0) -
         f"`contextos-auditor doctor` for the exact snippet for your framework."
     )
     try:
+        waited = 0.0
+        nudged = False
         while session_dir is None:
             time.sleep(poll_seconds)
+            waited += poll_seconds
+            # An indefinite silent wait is indistinguishable from a hang.
+            # Say something once, then keep waiting -- starting the
+            # dashboard before the agent is a legitimate workflow, so a
+            # hard timeout would break as many people as it helps.
+            if not nudged and waited >= 30.0:
+                nudged = True
+                print(
+                    "\nStill nothing after 30s. Two things worth checking:\n"
+                    "  - is the auditor actually attached? `contextos-auditor doctor`\n"
+                    "  - is your agent running from this directory? sessions are written\n"
+                    f"    under {args.audit_root}, relative to the agent's working directory\n"
+                    "\nOr, to see what this looks like without an agent at all:\n"
+                    "  contextos-auditor demo --serve\n"
+                )
             session_dir = _resolve_session_dir(args)
     except KeyboardInterrupt:
         print("\nStopped waiting.")
@@ -147,6 +168,40 @@ def cmd_watch(args: argparse.Namespace) -> int:
             time.sleep(args.poll_interval)
     except KeyboardInterrupt:
         print("\nStopped.")
+    return 0
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    """Generate and show a synthetic session -- no agent, SDK or key needed."""
+    from contextos_auditor.demo import run_demo
+
+    audit_root = Path(args.audit_root)
+    print(
+        "Generating a synthetic demo session -- no agent, no API key, no network.\n"
+        "This is fabricated input run through the real analysis, so the numbers\n"
+        "below are computed the same way they are for your own agents.\n"
+    )
+    session_id = run_demo(audit_root)
+    session_dir = audit_root / session_id
+    sid, meta, result = snapshot(session_dir)
+
+    if args.serve:
+        print(f"Serving {sid} at http://127.0.0.1:{args.port} (Ctrl-C to stop)\n")
+        return serve_session(session_dir, poll_interval=_DEFAULT_POLL_SECONDS, port=args.port)
+
+    print(render_terminal(sid, meta, result))
+    if args.html:
+        out_path = Path(args.html)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(render_html(sid, meta, result, _DEFAULT_POLL_SECONDS))
+        print(f"\nWrote {out_path}")
+    print(
+        f"\nThat was a demo. To do this on your own agent:\n"
+        f"  1. `contextos-auditor doctor`  -- get the one-line snippet for your framework\n"
+        f"  2. run your agent\n"
+        f"  3. `contextos-auditor watch`   -- live view of the real thing\n"
+        f"\nDelete the demo data any time: rm -rf {session_dir}"
+    )
     return 0
 
 
@@ -248,7 +303,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="contextos-auditor")
-    sub = ap.add_subparsers(dest="command", required=True)
+    sub = ap.add_subparsers(dest="command")
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--audit-root", default=str(_DEFAULT_AUDIT_ROOT))
@@ -275,12 +330,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", help="check which framework SDKs/hooks are available")
     p_doctor.set_defaults(func=cmd_doctor)
 
+    p_demo = sub.add_parser(
+        "demo", parents=[common],
+        help="see it work on a synthetic session -- no agent or API key required",
+    )
+    p_demo.add_argument("--serve", action="store_true", help="open the localhost dashboard instead of printing to the terminal")
+    p_demo.add_argument("--port", type=int, default=8765)
+    p_demo.add_argument("--html", help="write a self-contained HTML report here")
+    p_demo.set_defaults(func=cmd_demo)
+
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = build_parser()
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
+    if getattr(args, "func", None) is None:
+        # Bare `contextos-auditor` used to exit 2 with an argparse usage
+        # error, which tells a first-time user nothing about what to do
+        # next. Point them at the one command that works with no setup.
+        print(
+            "contextos-auditor -- see what your AI agent is really spending.\n"
+            "\n"
+            "New here? This needs no agent, no API key and no network:\n"
+            "\n"
+            "    contextos-auditor demo --serve\n"
+            "\n"
+            "Already have an agent?\n"
+            "\n"
+            "    contextos-auditor doctor    # the one-line snippet for your framework\n"
+            "    contextos-auditor watch     # live view once your agent is running\n"
+            "\n"
+            "Full command list: contextos-auditor --help"
+        )
+        return 0
     return args.func(args)
 
 

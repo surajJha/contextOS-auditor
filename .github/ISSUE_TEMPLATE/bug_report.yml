@@ -1,0 +1,74 @@
+name: Bug report
+description: Something the auditor measured, printed or crashed on looks wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The auditor runs entirely on your machine and never sends data anywhere.
+        That also means we cannot see your session — so the details below are the
+        only thing we have to go on.
+
+        **Please do not paste raw session data.** It can contain your source code
+        and prompts. Redacted excerpts or the summary numbers are enough.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: |
+        If `contextos-auditor demo` also shows it, say so — that is the easiest
+        case for us to fix, because it needs no agent and no API key.
+      placeholder: |
+        1. pip install contextos-auditor[langgraph]
+        2. attach with ...
+        3. run `contextos-auditor watch`
+        4. the savings number shows ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: framework
+    attributes:
+      label: Framework
+      options:
+        - CrewAI
+        - LangGraph
+        - AutoGen
+        - OpenAI Agents SDK
+        - None (demo / report / history only)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `pip show contextos-auditor | grep Version`
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version and OS
+      placeholder: "3.12 on macOS 15"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `contextos-auditor doctor`
+      description: This is automatically formatted as code, no backticks needed.
+      render: shell

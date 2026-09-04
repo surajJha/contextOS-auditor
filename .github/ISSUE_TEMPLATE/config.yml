@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Access to contextos-optimiser (the paid SDK)
+    url: mailto:skj48817@gmail.com
+    about: The optimiser is in private release. Email for access and pricing.
+  - name: Security or privacy report
+    url: mailto:skj48817@gmail.com
+    about: Please report anything that could leak user data privately, not as a public issue.
