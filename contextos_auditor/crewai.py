@@ -72,16 +72,23 @@ class CrewAIAuditAdapter:
             otel_endpoint=otel_endpoint, redact_secrets=redact_secrets,
         )
         self._handlers: list[tuple[Any, Any]] = []
+        self._detached = False
 
     @guarded("crewai.on_llm_completed")
     def on_llm_completed(self, source: Any, event: Any) -> None:
+        if self._detached:
+            return
         self.session.record_llm(event.usage or {}, event.model)
 
     @guarded("crewai.on_tool_finished")
     def on_tool_finished(self, source: Any, event: Any) -> None:
+        if self._detached:
+            return
         self.session.record_tool(event.tool_name, event.tool_args, event.output)
 
     def attach(self) -> None:
+        if self._handlers or self._detached:
+            return
         from crewai.events.event_bus import crewai_event_bus
         from crewai.events.types.llm_events import LLMCallCompletedEvent
         from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
@@ -96,6 +103,16 @@ class CrewAIAuditAdapter:
     def detach(self, *, success: bool | None = None, error: str = "") -> None:
         from crewai.events.event_bus import crewai_event_bus
 
+        if self._detached:
+            return
+        # Unregistering does not cancel handlers already queued by the SDK.
+        # Drain before finishing so their observations land in an open session.
+        try:
+            if crewai_event_bus.flush() is False:
+                _warn_once("crewai.detach.flush", RuntimeError("event handlers did not finish before timeout"))
+        except Exception as exc:
+            _warn_once("crewai.detach.flush", exc)
+        self._detached = True
         # AUD-009: unregister best-effort per handler -- one failing `off()`
         # call must not skip the rest, and must never prevent session.finish()
         # below from running (that's the caller's real "run ended" signal).

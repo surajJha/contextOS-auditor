@@ -120,6 +120,26 @@ class AuditorCallback(BaseCallbackHandler):
         result_text = getattr(output, "content", output)
         self.session.record_tool(started["name"], started["args"], result_text)
 
+    @guarded("langgraph.on_tool_error")
+    def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        """BUG-A9: LangChain dispatches `on_tool_error`, NOT `on_tool_end`,
+        when a tool raises. Without this override the call was never
+        recorded and its `_pending_tool_starts[run_id]` entry leaked for the
+        lifetime of the process.
+
+        A failed tool call is not a non-event: the provider still billed for
+        it, and the error string is fed straight back into the next prompt.
+        Retry storms on a failing tool are one of the largest real sources
+        of the waste this product exists to surface, so omitting them
+        systematically under-reported exactly the pathology being sold.
+        """
+        started = self._pending_tool_starts.pop(run_id, None)
+        if started is None:
+            return
+        self.session.record_tool(
+            started["name"], started["args"], f"ERROR: {error.__class__.__name__}: {error}"
+        )
+
     @guarded("langgraph.on_llm_end")
     def on_llm_end(self, response: Any, *, run_id: UUID, **kwargs: Any) -> None:
         usage, model = self._extract_usage(response)

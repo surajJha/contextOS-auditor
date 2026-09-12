@@ -1,6 +1,4 @@
-"""Vendored from `dashboard/shadow_kit.py` in the toku monorepo -- unchanged
-estimation logic, copied so this package installs standalone (see this
-package's README for the vendoring note).
+"""Canonical shadow estimator for the standalone Auditor and dashboard.
 
 Observes baseline tool events (especially write_file) and estimates what
 those writes would have cost if the paid Kit's edit_file hunk tool had been
@@ -13,10 +11,35 @@ attached.
 
 from __future__ import annotations
 
+import posixpath
 from dataclasses import asdict, dataclass
 
 from contextos_auditor._internal import tokens as tk
-from contextos_auditor._internal.pricing import PRICING_SNAPSHOT_DATE, PRICING_SOURCE_URL
+from contextos_auditor._internal.shadow_totals import SessionTotals
+
+
+def _norm_path(path) -> str:
+    """Canonical key for `file_state` / duplicate-read detection.
+
+    BUG-B11: keying on the raw arg string meant `a.py`, `./a.py` and
+    `dir/../a.py` were three different files, so genuine duplicate reads
+    were silently under-reported. Normalising costs nothing and only ever
+    merges keys that denote the same file.
+
+    Backslashes are folded to `/` first so a Windows-style arg normalises
+    the same way on POSIX (`posixpath.normpath` would otherwise treat the
+    whole string as one segment). Case is preserved: this has to stay
+    correct on case-sensitive filesystems, and a wrong merge would
+    manufacture a duplicate that never happened -- the one error this
+    product must never make.
+    """
+    text = str(path).replace("\\", "/").strip()
+    if not text:
+        return ""
+    normed = posixpath.normpath(text)
+    # normpath turns "./a.py" into "a.py" but leaves "a.py" alone; strip a
+    # leading "./" that survives on inputs like "././".
+    return normed[2:] if normed.startswith("./") else normed
 
 
 @dataclass(frozen=True)
@@ -137,173 +160,48 @@ def _levers_fired_from_tool_calls(tool_calls: list[dict]) -> set[str]:
     return fired
 
 
+def _observe_tools(
+    tool_calls: list[dict],
+    turn,
+    file_state: dict[str, str],
+    writes: list[dict],
+    dupes: list[dict],
+) -> None:
+    """Reconstruct known file contents and collect attributable opportunities."""
+    for tool in tool_calls:
+        name = tool.get("name")
+        args = tool.get("args") or {}
+        if name == "read_file" and args.get("path"):
+            content = tool.get("result_text")
+            if isinstance(content, str):
+                path = _norm_path(args["path"])
+                if file_state.get(path) == content and content:
+                    dupes.append({
+                        "turn": turn,
+                        "path": path,
+                        "tokens": tk.count_text(content),
+                    })
+                file_state[path] = content
+        if name == "write_file" and args.get("path") is not None:
+            path = _norm_path(args["path"])
+            new_text = str(args.get("content") or "")
+            hunk = estimate_hunk(path, file_state.get(path, ""), new_text)
+            writes.append({"turn": turn, **hunk.as_dict()})
+            file_state[path] = new_text
+
+
 def shadow_session(events: list[dict]) -> dict:
-    """Fold an events.jsonl-shaped list into actual vs Kit opportunity totals."""
+    """Fold events into observed usage and bounded, explicitly estimated waste."""
+    totals = SessionTotals()
     file_state: dict[str, str] = {}
     writes: list[dict] = []
     dupes: list[dict] = []
-    turns: list[dict] = []
-    actual_nano = 0
-    actual_prompt = 0
-    actual_completion = 0
-    actual_total_tokens = 0
-    waste_tokens = 0
-    levers_fired: set[str] = set()
-    actual_usd = 0.0
-    usd_fully_priced = True  # flips to False the first turn with tokens but no dated price
-
-    for ev in events:
-        kind = ev.get("kind")
-        if kind == "turn":
-            usage = ev.get("usage") or {}
-            cost = ev.get("cost") or {}
-            prompt = int(usage.get("prompt_tokens") or 0)
-            completion = int(usage.get("completion_tokens") or 0)
-            total = int(usage.get("total_tokens") or (prompt + completion))
-            nano = int(cost.get("total_nano_aiu") or 0)
-            actual_prompt += prompt
-            actual_completion += completion
-            actual_total_tokens += total
-            actual_nano += nano
-            usd = cost.get("estimated_usd")
-            if usd is not None:
-                actual_usd += float(usd)
-            elif total > 0:
-                usd_fully_priced = False
-            tool_calls = ev.get("tool_calls") or []
-            levers_fired |= _levers_fired_from_tool_calls(tool_calls)
-            turns.append(
-                {
-                    "turn": ev.get("turn"),
-                    "prompt_tokens": prompt,
-                    "completion_tokens": completion,
-                    "total_tokens": total,
-                    "nano_aiu": nano,
-                    "tools": [t.get("name") for t in tool_calls],
-                }
-            )
-            for t in tool_calls:
-                name = t.get("name")
-                args = t.get("args") or {}
-                if name == "read_file" and args.get("path"):
-                    # Prefer explicit content captured on the event; else keep prior.
-                    content = t.get("result_text")
-                    if isinstance(content, str):
-                        path = str(args["path"])
-                        # A re-read of content already in the transcript is
-                        # pure duplicate spend: it buys no new information
-                        # and is re-sent as prompt tokens on every turn that
-                        # follows. Record it here; the per-turn multiplier
-                        # can only be applied once we know how many turns
-                        # the session actually ran.
-                        if file_state.get(path) == content and content:
-                            dupes.append(
-                                {
-                                    "turn": ev.get("turn"),
-                                    "path": path,
-                                    "tokens": tk.count_text(content),
-                                }
-                            )
-                        file_state[path] = content
-                if name == "write_file" and args.get("path") is not None:
-                    path = str(args["path"])
-                    new_text = str(args.get("content") or "")
-                    old_text = file_state.get(path, "")
-                    hunk = estimate_hunk(path, old_text, new_text)
-                    waste_tokens += hunk.waste_tokens
-                    writes.append(
-                        {
-                            "turn": ev.get("turn"),
-                            **hunk.as_dict(),
-                        }
-                    )
-                    file_state[path] = new_text
-
-    # Duplicate-context waste. A redundant read of N tokens landing on turn
-    # T is re-sent in the prompt of every later turn, so its true cost is
-    # N x (number of turns it was carried through), not N. This is the
-    # dominant waste category in real ReAct loops -- counting only
-    # write-hunk waste understates the opportunity by an order of
-    # magnitude, which makes the free auditor's number irreconcilable with
-    # the measured savings the paid tool actually delivers.
-    #
-    # Two deliberate conservatism guards:
-    #   1. Providers with prompt caching bill repeated prefixes at a
-    #      discount, so on those this over-states. We do not know from the
-    #      trace whether caching was active.
-    #   2. The total is clamped to observed prompt tokens, so the estimate
-    #      can never claim more waste than the session demonstrably spent.
-    last_turn = max((int(t.get("turn") or 0) for t in turns), default=0)
-    dup_waste_tokens = 0
-    for d in dupes:
-        carried = max(1, last_turn - int(d.get("turn") or 0) + 1)
-        d["turns_carried"] = carried
-        d["waste_tokens"] = int(d["tokens"]) * carried
-        dup_waste_tokens += d["waste_tokens"]
-    dup_waste_tokens = min(dup_waste_tokens, actual_prompt)
-
-    write_waste_tokens = waste_tokens
-    waste_tokens = write_waste_tokens + dup_waste_tokens
-
-    cost_per_token = (
-        actual_nano / actual_total_tokens if actual_total_tokens else 0.0
-    )
-    kit_nano = max(0, int(round(actual_nano - waste_tokens * cost_per_token)))
-
-    # Framework adapters (LangGraph/CrewAI/AutoGen/OpenAI Agents SDK) usually
-    # have no real per-model billing unit to attach (no Copilot total_nano_aiu,
-    # no live provider invoice) — actual_nano stays 0 rather than inventing a
-    # price table. Fall back to a token-fraction estimate so the Auditor still
-    # shows a meaningful number, clearly labeled as token-based, not dollar-based.
-    basis = "nano_aiu" if actual_nano > 0 else "tokens"
-    if actual_nano > 0:
-        save_pct = (1 - kit_nano / actual_nano) * 100.0
-    elif actual_total_tokens > 0:
-        save_pct = (waste_tokens / actual_total_tokens) * 100.0
-    else:
-        save_pct = 0.0
-
-    return {
-        "actual": {
-            "prompt_tokens": actual_prompt,
-            "completion_tokens": actual_completion,
-            "total_tokens": actual_total_tokens,
-            "total_nano_aiu": actual_nano,
-            # AUD-011: dated $ estimate, only populated when every turn's
-            # model had a citable price in _internal/pricing.py -- None
-            # (not 0) otherwise, so a partially-priced multi-model session
-            # never silently under-reports.
-            "estimated_usd": (
-                round(actual_usd, 6)
-                if usd_fully_priced and actual_total_tokens > 0
-                else None
-            ),
-        },
-        "pricing": {
-            "source": PRICING_SOURCE_URL,
-            "snapshot_date": PRICING_SNAPSHOT_DATE,
-        },
-        "kit_estimate": {
-            "total_nano_aiu": kit_nano,
-            "write_waste_tokens": write_waste_tokens,
-            "duplicate_context_waste_tokens": dup_waste_tokens,
-            "waste_tokens": waste_tokens,
-            "label": "estimated",
-            "basis": basis,
-        },
-        "save_pct": round(save_pct, 1),
-        "writes": writes,
-        "duplicate_reads": dupes,
-        "turns": turns,
-        "levers_fired": sorted(levers_fired),
-        "disclaimer": (
-            "Estimated opportunity only. Auditor does not change your bill. "
-            "Savings apply when AgentCost Kit is attached (paid). Shadow "
-            "cannot model trajectory changes."
-            if basis == "nano_aiu"
-            else "Estimated opportunity only, based on token counts (no "
-            "real billing unit available for this session's model/provider). "
-            "Auditor does not change your bill. Shadow cannot model "
-            "trajectory changes."
-        ),
-    }
+    levers: set[str] = set()
+    for event in events:
+        if event.get("kind") != "turn":
+            continue
+        totals.record(event)
+        tools = event.get("tool_calls") or []
+        levers |= _levers_fired_from_tool_calls(tools)
+        _observe_tools(tools, event.get("turn"), file_state, writes, dupes)
+    return totals.summarize(writes, dupes, levers)

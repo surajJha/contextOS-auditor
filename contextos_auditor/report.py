@@ -8,12 +8,65 @@ import html
 import json
 from typing import Any
 
+from contextos_auditor._internal.pricing import estimate_usd
+from contextos_auditor._internal.report_history import (
+    HISTORY_DISCLAIMER as HISTORY_DISCLAIMER,
+    HISTORY_EMPTY_MARKER as HISTORY_EMPTY_MARKER,
+    _HISTORY_TEMPLATE as _HISTORY_TEMPLATE,
+    _history_table_html as _history_table_html,
+    _history_trends_html as _history_trends_html,
+    _sparkline_svg as _sparkline_svg,
+    render_history_html as render_history_html,
+)
+from contextos_auditor._internal.report_template import _HTML_TEMPLATE as _HTML_TEMPLATE
+
 #: LNCH-017 marker strings. Tests and the renderers below both key off
 #: these exact substrings, so keep them as named constants rather than
 #: inlined text that could drift apart.
 NO_TURNS_MARKER = "waiting for the first turn"
 NO_WASTE_MARKER = "no waste detected in this session"
 SESSION_ERROR_MARKER = "SESSION ERROR"
+#: BUG-F-002/C5 marker: shown whenever `load_events` had to skip lines it
+#: could not parse, so a truncated session can never look like a complete
+#: one. The count is carried on `meta["unreadable_lines"]`, injected by
+#: `cli.snapshot()` rather than read from session.json.
+UNREADABLE_LINES_MARKER = "unreadable lines skipped"
+
+
+#: BUG-C8 marker: whether the token counts shown are real BPE counts or the
+#: chars/4 fallback. The signal existed in `_internal/tokens.py` but was
+#: never rendered anywhere, so a session counted with the heuristic looked
+#: exactly as authoritative as an exactly-counted one.
+TOKEN_ACCURACY_MARKER = "token counts:"
+
+
+def _token_accuracy_note() -> str:
+    """Explain local text-counting accuracy separately from provider usage."""
+    try:
+        from contextos_auditor._internal.tokens import accuracy_note
+
+        return accuracy_note() or ""
+    except Exception:
+        return ""
+
+
+def _unreadable_lines(meta: dict[str, Any]) -> int:
+    try:
+        return max(0, int(meta.get("unreadable_lines") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _unreadable_note(meta: dict[str, Any]) -> str:
+    """BUG-F-002/C5: honesty requirement -- the numbers below are computed
+    from fewer records than the file contains, and the reader must know."""
+    n = _unreadable_lines(meta)
+    if not n:
+        return ""
+    return (
+        f"!! {n} {UNREADABLE_LINES_MARKER} in events.jsonl -- the totals below are "
+        "incomplete (a torn final line is normal while a session is still running)"
+    )
 
 
 def _build_trace(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -103,35 +156,65 @@ def _usd_line(result: dict[str, Any]) -> str | None:
 OPTIMISER_CONTACT_EMAIL = "skj48817@gmail.com"
 
 
-def _cta_usd_line(result: dict[str, Any]) -> str | None:
+def _turn_label(turn: Any) -> str:
+    """BUG-R6: a duplicate read whose originating turn was never recorded
+    used to render the literal string "turn None", which reads as a crash.
+    An unknown turn is a real state (the tool call arrived before any LLM
+    turn was closed), so name it honestly instead."""
+    if turn is None or turn == "":
+        return "?"
+    return str(turn)
+
+
+def _cta_usd_line(result: dict[str, Any], model: str | None = None) -> str | None:
     """AUD-017: the auditor's finding is the sales pitch for the paid
     `contextos-optimiser` package (see architecture.md's "coupled by
     design" note) -- but until now that pitch was never actually rendered
     anywhere a user would see it. Only fires when there's a genuine, real
-    finding (waste_tokens > 0), so a clean session shows no CTA at all."""
-    usd = result["actual"].get("estimated_usd")
-    save_pct = result.get("save_pct", 0.0)
-    if usd is None or save_pct <= 0:
+    finding (waste_tokens > 0), so a clean session shows no CTA at all.
+
+    BUG-R2: this used to compute `usd * (save_pct / 100)`, i.e. it scaled a
+    *dollar* total by a *token-share* percentage. Those are not
+    interchangeable: input and output tokens are priced differently (often
+    4-8x apart), and the waste this tool finds is almost entirely duplicated
+    *prompt* context. Scaling the blended total therefore overstated the
+    dollar saving on every session whose output tokens cost more than its
+    input tokens -- which is nearly all of them. We now price the wasted
+    tokens directly, at the input rate, as the input tokens they actually
+    are. If the model has no dated price, we say nothing rather than guess.
+    """
+    kit_est = result["kit_estimate"]
+    waste_tokens = int(kit_est.get("waste_tokens", kit_est["write_waste_tokens"]) or 0)
+    if waste_tokens <= 0:
         return None
-    saved_usd = usd * (save_pct / 100.0)
-    return f"~${saved_usd:.4f} of this session's ${usd:.4f} (list price)"
+    usd = result["actual"].get("estimated_usd")
+    saved_usd = estimate_usd(model, waste_tokens, 0)
+    if saved_usd is None:
+        return None
+    # BUG-R3: `~$0.0000` next to a positive percentage reads like a bug and
+    # undermines every other number on the page. Below the display
+    # precision, say so explicitly instead of rounding to a hard zero.
+    saved_str = "<$0.0001" if saved_usd < 0.00005 else f"~${saved_usd:.4f}"
+    if usd is None:
+        return f"{saved_str} at list price"
+    return f"{saved_str} of this session's ${usd:.4f} (list price)"
 
 
-def _cta_lines(result: dict[str, Any]) -> list[str] | None:
+def _cta_lines(result: dict[str, Any], model: str | None = None) -> list[str] | None:
     kit_est = result["kit_estimate"]
     waste_tokens = kit_est.get("waste_tokens", kit_est["write_waste_tokens"])
     save_pct = result.get("save_pct", 0.0)
     if waste_tokens <= 0 or save_pct <= 0:
         return None
-    usd_line = _cta_usd_line(result)
+    usd_line = _cta_usd_line(result, model)
     lines = [
         "",
-        f"This session left {save_pct:.1f}% ({waste_tokens} tokens"
+        f"Estimated opportunity: {save_pct:.1f}% ({waste_tokens} tokens"
         + (f", {usd_line}" if usd_line else "")
-        + ") on the table.",
-        "contextos-optimiser is a drop-in replacement for these same file",
-        "tools that eliminates exactly this waste -- 90 days free, no code",
-        "rewrite. Currently in private release.",
+        + "). Not measured savings.",
+        "contextos-optimiser provides replacement file tools to reduce",
+        "supported waste. Wire them into your agent and measure the result;",
+        "savings and task quality vary. Private access, with a 90-day trial.",
         f"To request access, email {OPTIMISER_CONTACT_EMAIL}",
     ]
     return lines
@@ -171,6 +254,10 @@ def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any
     if status == "error":
         lines.append(f"!! {SESSION_ERROR_MARKER}: {meta.get('error') or '(no error detail recorded)'}")
 
+    unreadable = _unreadable_note(meta)
+    if unreadable:
+        lines.append(unreadable)
+
     lines.append(f"turns so far: {n_turns}")
 
     # LNCH-017a: no turns yet is a distinct, actionable state -- not a
@@ -192,6 +279,9 @@ def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any
         f"actual:  prompt={actual['prompt_tokens']} completion={actual['completion_tokens']} "
         f"total={actual['total_tokens']} nano_aiu={actual['total_nano_aiu']}"
     )
+    accuracy = _token_accuracy_note()
+    if accuracy:
+        lines.append(f"{TOKEN_ACCURACY_MARKER} {accuracy}")
     usd_line = _usd_line(result)
     lines.append(
         usd_line
@@ -221,9 +311,10 @@ def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any
         lines.append("")
         lines.append("duplicate reads (content re-sent that was already in context):")
         for d in dupes:
+            bound = " (bounded by recorded spend)" if d.get("clamped") else ""
             lines.append(
                 f"  turn {d['turn']}: re-read {d['path']} ({d['tokens']} tokens), "
-                f"carried through {d['turns_carried']} turns = {d['waste_tokens']} tokens"
+                f"carried through {d['turns_carried']} turns = {d['waste_tokens']} tokens{bound}"
             )
     trace = _build_trace(result)
     if trace:
@@ -231,7 +322,7 @@ def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any
         lines.append("trace (turn -> tool calls):")
         for span in trace:
             lines.append(
-                f"  turn {span['turn']}: {span['total_tokens']} tokens "
+                f"  turn {_turn_label(span.get('turn'))}: {span['total_tokens']} tokens "
                 f"(prompt={span['prompt_tokens']} completion={span['completion_tokens']})"
             )
             for tool in span["spans"]:
@@ -242,244 +333,10 @@ def render_terminal(session_id: str, meta: dict[str, Any], result: dict[str, Any
                     f"could have been {w['waste_tokens']} tokens smaller with a hunk-based edit"
                 )
     lines.append(f"-- {result['disclaimer']}")
-    cta = _cta_lines(result)
+    cta = _cta_lines(result, meta.get("model"))
     if cta:
         lines += cta
     return "\n".join(lines)
-
-
-_HTML_TEMPLATE = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-{refresh_tag}
-<title>Live Auditor -- {session_id}</title>
-<style>
-:root {{
-  --bg: #05070d;
-  --panel: #0d1220;
-  --panel-border: #1c2436;
-  --text: #e7ebf5;
-  --text-dim: #8792a8;
-  --text-dimmer: #5b6478;
-  --accent: #7c5cff;
-  --pos: #35e2c4;
-  --neg: #ff5c7a;
-  --radius: 14px;
-  --mono: "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --display: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}}
-* {{ box-sizing: border-box; }}
-body {{
-  font-family: var(--sans);
-  margin: 0;
-  padding: 2.5rem 2rem;
-  background: var(--bg);
-  color: var(--text);
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
-}}
-.wrap {{ max-width: 720px; margin: 0 auto; }}
-h1 {{
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 1.9rem;
-  letter-spacing: -0.01em;
-  margin: 0 0 0.5rem;
-  color: var(--text);
-}}
-.meta {{
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  color: var(--text-dim);
-  margin: 0 0 1.75rem;
-}}
-.savings-label {{
-  font-size: 0.85rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: 0 0 0.35rem;
-}}
-.pct {{ font-family: var(--display); font-size: 2.6rem; font-weight: 700; margin: 0 0 1.75rem; }}
-.pct.pos {{ color: var(--pos); }}
-.pct.neg {{ color: var(--neg); }}
-table {{
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  margin: 0 0 1.5rem;
-}}
-th, td {{
-  padding: 0.65rem 1rem;
-  text-align: right;
-  font-family: var(--mono);
-  font-size: 0.9rem;
-  border-bottom: 1px solid var(--panel-border);
-}}
-tr:last-child th, tr:last-child td {{ border-bottom: none; }}
-th {{ text-align: left; font-weight: 500; color: var(--text-dim); }}
-td {{ color: var(--text); }}
-.disclaimer {{ font-size: 0.8rem; color: var(--text-dimmer); max-width: 560px; }}
-a {{ color: var(--accent); }}
-details.trace {{
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius);
-  margin: 0 0 1.5rem;
-  padding: 0.9rem 1.1rem;
-}}
-details.trace > summary {{
-  cursor: pointer;
-  font-size: 0.85rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}}
-.trace-turn {{ margin: 0.9rem 0 0 0; }}
-.trace-turn-head {{
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  color: var(--text);
-}}
-.trace-spans {{ list-style: none; margin: 0.35rem 0 0; padding: 0; }}
-.trace-spans li {{
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  color: var(--text-dim);
-  padding: 0.15rem 0 0.15rem 1.2rem;
-  border-left: 1px solid var(--panel-border);
-  margin-left: 0.3rem;
-}}
-.trace-spans li.waste {{ color: var(--neg); }}
-.cta {{
-  background: var(--panel);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  margin: 0 0 1.5rem;
-  padding: 1.1rem 1.25rem;
-}}
-.cta p {{ margin: 0 0 0.6rem; font-size: 0.92rem; }}
-.cta p:last-child {{ margin-bottom: 0; }}
-.cta code {{
-  font-family: var(--mono);
-  background: #1c2436;
-  padding: 0.15rem 0.4rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}}
-.est {{
-  font-family: var(--mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #8b94a7;
-  border: 1px solid #2a3346;
-  border-radius: 999px;
-  padding: 0.1rem 0.4rem;
-  vertical-align: middle;
-  margin-left: 0.4rem;
-  font-weight: 500;
-}}
-th.sub {{
-  padding-left: 1.4rem;
-  font-weight: 400;
-  color: #8b94a7;
-}}
-.dupes {{ margin: 1.25rem 0; }}
-.dupes h2 {{ font-size: 0.95rem; margin: 0 0 0.5rem; }}
-.dupes .math {{
-  font-family: var(--mono);
-  font-size: 0.8rem;
-  color: #8b94a7;
-}}
-.offenders {{ margin: 1.25rem 0; }}
-.offenders h2 {{ font-size: 0.95rem; margin: 0 0 0.5rem; }}
-.chart {{
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius);
-  margin: 0 0 1.5rem;
-  padding: 1rem 1.1rem 0.5rem;
-}}
-.chart h2 {{ font-size: 0.95rem; margin: 0 0 0.75rem; }}
-.chart-legend {{
-  font-family: var(--mono);
-  font-size: 0.78rem;
-  color: var(--text-dim);
-  margin: 0.4rem 0 0.75rem;
-}}
-.chart-legend .swatch {{
-  display: inline-block;
-  width: 0.7em;
-  height: 0.7em;
-  border-radius: 2px;
-  margin: 0 0.35em 0 0.9em;
-  vertical-align: middle;
-}}
-.chart-legend .swatch:first-child {{ margin-left: 0; }}
-.export {{
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 999px;
-  padding: 0.45rem 1rem;
-  text-decoration: none;
-  margin: 0 0 1.5rem;
-}}
-.export:hover {{ border-color: var(--accent); color: var(--accent); }}
-.state-panel {{
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius);
-  margin: 0 0 1.5rem;
-  padding: 1.25rem 1.4rem;
-}}
-.state-panel.success {{ border-color: var(--pos); }}
-.state-panel h2 {{ margin: 0 0 0.5rem; font-size: 1.05rem; }}
-.state-panel.success h2 {{ color: var(--pos); }}
-.state-panel p {{ margin: 0 0 0.4rem; font-size: 0.9rem; color: var(--text-dim); }}
-.state-panel code {{
-  font-family: var(--mono);
-  background: #1c2436;
-  padding: 0.15rem 0.4rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  color: var(--text);
-}}
-.error-banner {{
-  background: rgba(255, 92, 122, 0.1);
-  border: 1px solid var(--neg);
-  border-radius: var(--radius);
-  color: var(--neg);
-  margin: 0 0 1.5rem;
-  padding: 0.85rem 1.1rem;
-  font-family: var(--mono);
-  font-size: 0.85rem;
-}}
-</style>
-</head>
-<body>
-<div class="wrap">
-<h1>Live Auditor</h1>
-<p class="meta">session={session_id} &middot; framework={framework} &middot; model={model} &middot; status={status}</p>
-{error_banner_html}
-{main_html}
-<p class="disclaimer">{disclaimer}</p>
-{cta_html}
-{export_html}
-{footer}
-</div>
-</body>
-</html>
-"""
 
 
 def _trace_html(result: dict[str, Any]) -> str:
@@ -502,7 +359,7 @@ def _trace_html(result: dict[str, Any]) -> str:
             )
         turns_html.append(
             f'<div class="trace-turn">'
-            f'<div class="trace-turn-head">turn {html.escape(str(span["turn"]))} '
+            f'<div class="trace-turn-head">turn {html.escape(_turn_label(span.get("turn")))} '
             f'&middot; {span["total_tokens"]} tokens '
             f'(prompt={span["prompt_tokens"]} completion={span["completion_tokens"]})</div>'
             f'<ul class="trace-spans">{spans_html or "<li>(no tool calls)</li>"}</ul>'
@@ -516,24 +373,24 @@ def _trace_html(result: dict[str, Any]) -> str:
     )
 
 
-def _cta_html(result: dict[str, Any]) -> str:
-    lines = _cta_lines(result)
+def _cta_html(result: dict[str, Any], model: str | None = None) -> str:
+    lines = _cta_lines(result, model)
     if not lines:
         return ""
     kit_est = result["kit_estimate"]
     waste_tokens = kit_est.get("waste_tokens", kit_est["write_waste_tokens"])
     save_pct = result["save_pct"]
-    usd_line = _cta_usd_line(result)
-    body = f"This session left <strong>{save_pct:.1f}%</strong> ({waste_tokens} tokens"
+    usd_line = _cta_usd_line(result, model)
+    body = f"Estimated opportunity: <strong>{save_pct:.1f}%</strong> ({waste_tokens} tokens"
     if usd_line:
         body += f", {html.escape(usd_line)}"
-    body += ") on the table."
+    body += "). Not measured savings."
     return (
         '<div class="cta">'
         f"<p>{body}</p>"
-        "<p><code>contextos-optimiser</code> is a drop-in replacement for these "
-        "same file tools that eliminates exactly this waste &mdash; 90 days "
-        "free, no code rewrite. Currently in private release.</p>"
+        "<p><code>contextos-optimiser</code> provides replacement file tools to reduce "
+        "supported waste. Wire them into your agent and measure the result; "
+        "savings and task quality vary. Private access, with a 90-day trial.</p>"
         f'<p>To request access, email <a href="mailto:{OPTIMISER_CONTACT_EMAIL}">'
         f"{OPTIMISER_CONTACT_EMAIL}</a></p>"
         "</div>"
@@ -549,15 +406,17 @@ def _dupes_html(result: dict[str, Any]) -> str:
         return ""
     rows = []
     for d in dupes:
+        bound = " (bounded by recorded spend)" if d.get("clamped") else ""
         rows.append(
             "<li>turn {turn}: re-read <code>{path}</code> &mdash; content already in context"
             '<div class="math">{tokens} tokens &times; {carried} turns carried = '
-            "<strong>{waste}</strong> tokens</div></li>".format(
-                turn=html.escape(str(d.get("turn"))),
+            "<strong>{waste}</strong> tokens{bound}</div></li>".format(
+                turn=html.escape(_turn_label(d.get("turn"))),
                 path=html.escape(str(d.get("path"))),
                 tokens=html.escape(str(d.get("tokens"))),
                 carried=html.escape(str(d.get("turns_carried"))),
                 waste=html.escape(str(d.get("waste_tokens"))),
+                bound=bound,
             )
         )
     return (
@@ -611,8 +470,16 @@ def _tokens_svg(result: dict[str, Any]) -> str:
     pad_left, pad_bottom, pad_top, pad_right = 10, 20, 10, 10
     plot_w = width - pad_left - pad_right
     plot_h = height - pad_top - pad_bottom
+    # BUG-R7: the chart used prompt+completion while every trace row prints
+    # `total_tokens`. Frameworks that report only a total (prompt and
+    # completion both 0) therefore drew an empty chart next to rows full of
+    # real numbers. Scale on whichever is larger so the two agree.
     max_total = max(
-        (int(t.get("prompt_tokens", 0)) + int(t.get("completion_tokens", 0))) for t in turns
+        max(
+            int(t.get("prompt_tokens", 0)) + int(t.get("completion_tokens", 0)),
+            int(t.get("total_tokens", 0)),
+        )
+        for t in turns
     ) or 1
     bar_w = plot_w / n
     gap = min(2.0, bar_w * 0.15)
@@ -622,9 +489,22 @@ def _tokens_svg(result: dict[str, Any]) -> str:
     for i, t in enumerate(turns):
         prompt = int(t.get("prompt_tokens", 0))
         completion = int(t.get("completion_tokens", 0))
+        total = int(t.get("total_tokens", 0))
         turn_no = html.escape(str(t.get("turn", i + 1)))
         x = pad_left + i * bar_w
         w = max(0.5, bar_w - gap)
+        if prompt + completion == 0 and total > 0:
+            # BUG-R7: this framework reported a total but no split. Draw the
+            # total as one honest bar rather than inventing a prompt /
+            # completion breakdown we were never given.
+            h = (total / max_total) * plot_h
+            bars.append(
+                f'<rect x="{x:.2f}" y="{baseline_y - h:.2f}" width="{w:.2f}" '
+                f'height="{h:.2f}" fill="#7c5cff">'
+                f"<title>turn {turn_no} total: {total} tokens "
+                f"(prompt/completion split not reported)</title></rect>"
+            )
+            continue
         prompt_h = (prompt / max_total) * plot_h
         completion_h = (completion / max_total) * plot_h
         y_prompt = baseline_y - prompt_h
@@ -672,11 +552,21 @@ def _export_button_html(session_id: str, result: dict[str, Any]) -> str:
 
 def _error_banner_html(meta: dict[str, Any]) -> str:
     """LNCH-017c: an errored session must be visible without reading the
-    small `status=` field in the meta line."""
-    if meta.get("status") != "error":
-        return ""
-    error_detail = html.escape(str(meta.get("error") or "(no error detail recorded)"))
-    return f'<div class="error-banner">&#9888; {SESSION_ERROR_MARKER}: {error_detail}</div>'
+    small `status=` field in the meta line. BUG-F-002/C5 reuses the same
+    banner slot for a "N unreadable lines skipped" warning."""
+    banners = []
+    if meta.get("status") == "error":
+        error_detail = html.escape(str(meta.get("error") or "(no error detail recorded)"))
+        banners.append(
+            f'<div class="error-banner">&#9888; {SESSION_ERROR_MARKER}: {error_detail}</div>'
+        )
+    n = _unreadable_lines(meta)
+    if n:
+        banners.append(
+            f'<div class="error-banner">&#9888; {n} {UNREADABLE_LINES_MARKER} in '
+            "events.jsonl -- the numbers on this page are incomplete.</div>"
+        )
+    return "".join(banners)
 
 
 def _main_html(result: dict[str, Any]) -> str:
@@ -753,30 +643,49 @@ def _main_html(result: dict[str, Any]) -> str:
     return "".join(parts)
 
 
+def _token_accuracy_html() -> str:
+    """BUG-C8: same honesty label as the terminal report, rendered next to
+    the numbers it qualifies. Empty when counts are exact."""
+    note = _token_accuracy_note()
+    if not note:
+        return ""
+    return (
+        f'<p class="disclaimer">{html.escape(TOKEN_ACCURACY_MARKER)} '
+        f"{html.escape(note)}</p>"
+    )
+
+
 def render_html(
     session_id: str,
     meta: dict[str, Any],
     result: dict[str, Any],
     poll_seconds: float,
     *,
-    live: bool = False,
+    auto_refresh: bool = True,
 ) -> str:
-    """`live=False` (default) renders a static snapshot with a meta-refresh
-    (used by `--html`, which re-writes this file to disk on each poll).
-    `live=True` (used by `server.py`) omits the meta-refresh -- the SSE
-    connection updates the page in place instead, so a periodic full
-    reload would just be visual noise."""
+    """`auto_refresh=True` (default) renders a meta-refresh tag and a footer
+    saying so -- correct only when something is actually re-writing this
+    file on each poll (`watch --html`).
+
+    BUG-R4: this used to be the behaviour for *every* HTML write, including
+    the one-shot exports produced by `report --html`, `demo --html` and
+    `watch --serve --html`. Nothing rewrites those files, so the page
+    silently reloaded identical content forever and the footer made a
+    promise the file could not keep. Those callers now pass
+    `auto_refresh=False`, as does `server.py`, whose SSE stream updates the
+    page in place."""
     return _HTML_TEMPLATE.format(
-        refresh_tag="" if live else f'<meta http-equiv="refresh" content="{poll_seconds:g}">',
-        footer="" if live else f"<p><small>auto-refreshes every {poll_seconds:g}s</small></p>",
+        refresh_tag=f'<meta http-equiv="refresh" content="{poll_seconds:g}">' if auto_refresh else "",
+        footer=f"<p><small>auto-refreshes every {poll_seconds:g}s</small></p>" if auto_refresh else "",
         session_id=html.escape(session_id),
         framework=html.escape(str(meta.get("framework", "unknown"))),
         model=html.escape(str(meta.get("model", "unknown"))),
         status=html.escape(str(meta.get("status", "unknown"))),
         error_banner_html=_error_banner_html(meta),
         main_html=_main_html(result),
+        token_accuracy_html=_token_accuracy_html(),
         disclaimer=html.escape(result["disclaimer"]),
-        cta_html=_cta_html(result),
+        cta_html=_cta_html(result, meta.get("model")),
         export_html=_export_button_html(session_id, result),
         poll_seconds=poll_seconds,
     )

@@ -23,10 +23,93 @@ never be able to break the real agent run it's watching.
 
 from __future__ import annotations
 
+import atexit
+import threading
 import warnings
 from typing import Any
 
 _otel_warned = False
+
+# BUG-C1: every OtelExporter used to build its OWN TracerProvider and
+# BatchSpanProcessor. Each of those spawns a background thread and registers
+# its own atexit shutdown hook, and when the collector is unreachable the
+# shutdown retries with exponential backoff *after the user's program has
+# already finished* -- measured at 6.98s of hang for 0.18s of real work, and
+# 12.33s with five sessions in one process, while printing "Transient error
+# ... retrying in 3.59s" to the user's stderr. An observability add-on that
+# adds seconds to your process exit and prints after your program ends is
+# not acceptable, so providers are now created once per endpoint and torn
+# down exactly once, under a hard time cap.
+_PROVIDER_LOCK = threading.Lock()
+_PROVIDERS: dict[str, Any] = {}
+_TRACERS: dict[str, Any] = {}
+_ATEXIT_REGISTERED = False
+
+# Bounds chosen so a completely unreachable collector costs the user well
+# under a second at exit rather than the ~7s measured before.
+_EXPORT_TIMEOUT_S = 2
+_SHUTDOWN_CAP_S = 1.0
+
+
+def _shutdown_all() -> None:
+    """Tear every provider down, but never let it hold the process open.
+
+    `TracerProvider.shutdown()` flushes synchronously and will sit in the
+    exporter's retry/backoff loop when the collector is down, so it is run
+    on a daemon thread and joined with a cap. If the cap expires the daemon
+    thread is abandoned and the interpreter exits anyway -- dropping some
+    telemetry is obviously correct when the alternative is hanging the
+    user's program.
+    """
+    with _PROVIDER_LOCK:
+        providers = list(_PROVIDERS.values())
+        _PROVIDERS.clear()
+        _TRACERS.clear()
+
+    def _drain() -> None:
+        for provider in providers:
+            try:
+                provider.shutdown()
+            except Exception:  # noqa: BLE001 -- exiting; nothing to report to
+                pass
+
+    worker = threading.Thread(target=_drain, name="contextos-otel-shutdown", daemon=True)
+    worker.start()
+    worker.join(_SHUTDOWN_CAP_S)
+
+
+def _get_tracer(endpoint: str) -> Any:
+    """One provider (and therefore one exporter thread) per endpoint."""
+    global _ATEXIT_REGISTERED
+    with _PROVIDER_LOCK:
+        if endpoint in _TRACERS:
+            return _TRACERS[endpoint]
+
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        resource = Resource.create({"service.name": "contextos-auditor"})
+        # shutdown_on_exit=False: we register a single capped atexit hook
+        # below instead of letting each provider install its own unbounded one.
+        provider = TracerProvider(resource=resource, shutdown_on_exit=False)
+        provider.add_span_processor(
+            BatchSpanProcessor(
+                OTLPSpanExporter(endpoint=endpoint, timeout=_EXPORT_TIMEOUT_S),
+                export_timeout_millis=int(_EXPORT_TIMEOUT_S * 1000),
+            )
+        )
+        tracer = trace.get_tracer("contextos_auditor", tracer_provider=provider)
+        _PROVIDERS[endpoint] = provider
+        _TRACERS[endpoint] = tracer
+        if not _ATEXIT_REGISTERED:
+            atexit.register(_shutdown_all)
+            _ATEXIT_REGISTERED = True
+        return tracer
 
 
 def _warn_otel_unavailable(exc: Exception) -> None:
@@ -54,20 +137,7 @@ class OtelExporter:
         self._framework = framework
         self._tracer: Any = None
         try:
-            from opentelemetry import trace
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-                OTLPSpanExporter,
-            )
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-            resource = Resource.create({"service.name": "contextos-auditor"})
-            provider = TracerProvider(resource=resource)
-            provider.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-            )
-            self._tracer = trace.get_tracer("contextos_auditor", tracer_provider=provider)
+            self._tracer = _get_tracer(endpoint)
         except Exception as exc:  # noqa: BLE001 -- see module docstring
             _warn_otel_unavailable(exc)
             self._tracer = None

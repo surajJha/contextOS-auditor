@@ -49,13 +49,56 @@ class AuditingChatCompletionClient(ChatCompletionClient):
         usage = getattr(result, "usage", None)
         model = getattr(self._wrapped, "model_info", {}) or {}
         model_name = model.get("family") if isinstance(model, dict) else None
-        usage_dict = {}
-        if usage is not None:
-            usage_dict = {
-                "prompt_tokens": getattr(usage, "prompt_tokens", 0),
-                "completion_tokens": getattr(usage, "completion_tokens", 0),
-            }
+        usage_dict = self._usage_dict(usage)
         self._session.record_llm(usage_dict, model_name)
+
+    @staticmethod
+    def _usage_dict(usage: Any) -> dict[str, Any]:
+        """Normalise whatever shape the client reports usage in.
+
+        BUG-A6: this used to be `getattr(usage, "prompt_tokens", 0)` only.
+        Plenty of AGNext-compatible clients (LiteLLM proxies, any
+        OpenAI-compatible custom client) expose usage as a plain **dict**,
+        which passes the `usage is not None` guard and then yields
+        `{"prompt_tokens": 0, "completion_tokens": 0}` with no warning at
+        all -- a real billed turn silently recorded as free. Handle
+        mappings and pydantic models too, and stay loud if a non-None usage
+        object yields nothing we recognise, rather than quietly reporting a
+        smaller bill than the user was charged.
+        """
+        if usage is None:
+            return {}
+        source: Any = usage
+        if not isinstance(source, dict):
+            dump = getattr(source, "model_dump", None)
+            if callable(dump):
+                try:
+                    source = dump()
+                except Exception:  # noqa: BLE001 -- fall through to getattr
+                    source = usage
+        if isinstance(source, dict):
+            out = {
+                k: source[k]
+                for k in ("prompt_tokens", "completion_tokens", "input_tokens",
+                          "output_tokens", "total_tokens")
+                if k in source
+            }
+        else:
+            out = {
+                k: getattr(source, k)
+                for k in ("prompt_tokens", "completion_tokens", "input_tokens",
+                          "output_tokens", "total_tokens")
+                if getattr(source, k, None) is not None
+            }
+        if not out:
+            _warn_once(
+                "autogen.unrecognised_usage_shape",
+                TypeError(
+                    f"usage object of type {type(usage).__name__} exposed no known "
+                    "token fields; this turn is recorded as zero tokens"
+                ),
+            )
+        return out
 
     async def create(self, *args: Any, **kwargs: Any):
         result = await self._wrapped.create(*args, **kwargs)
@@ -63,12 +106,20 @@ class AuditingChatCompletionClient(ChatCompletionClient):
         return result
 
     async def create_stream(self, *args: Any, **kwargs: Any):
-        last: Any = None
-        async for chunk in self._wrapped.create_stream(*args, **kwargs):
-            last = chunk
-            yield chunk
-        if last is not None and hasattr(last, "usage"):
-            self._record(last)
+        # Record the final CreateResult before yielding: consumers may finish
+        # their audit without requesting another item or closing this iterator.
+        recorded = False
+        stream = self._wrapped.create_stream(*args, **kwargs)
+        try:
+            async for chunk in stream:
+                if not recorded and hasattr(chunk, "usage"):
+                    self._record(chunk)
+                    recorded = True
+                yield chunk
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
 
     def actual_usage(self):
         return self._wrapped.actual_usage()
@@ -120,12 +171,35 @@ def audit_tool(fn: Any, session: FrameworkAuditSession):
         except Exception as exc:  # noqa: BLE001 -- intentional, see above
             _warn_once(f"autogen.audit_tool({name!r})", exc)
 
-    if inspect.iscoroutinefunction(fn):
+    # BUG-A8: `inspect.iscoroutinefunction(fn)` is False for a *callable
+    # object* whose `__call__` is `async def`, and for async generator
+    # functions. Those fell into the sync branch, which recorded the
+    # un-awaited coroutine as the tool result -- storing
+    # `result_text="<coroutine object ...>"` and a fabricated `chars` count
+    # that then fed the waste estimate. Behaviour was preserved but the
+    # measurement was invented, which is the worse failure for this product.
+    is_async = inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(
+        getattr(fn, "__call__", None)  # noqa: B004 -- not a callable() test; we
+        # need the bound __call__ itself to ask whether *it* is a coroutine
+        # function, which `callable(fn)` cannot answer.
+    )
+
+    if is_async:
 
         @functools.wraps(fn)
         async def _async_wrapped(*args: Any, **kwargs: Any):
             bound = _bind_args(fn, args, kwargs)
-            result = await fn(*args, **kwargs)
+            try:
+                result = await fn(*args, **kwargs)
+            except Exception as exc:
+                # BUG-A9: a failed tool call still costs tokens -- the error
+                # string is fed back to the model, and repeated failures are
+                # one of the biggest sources of the waste this product
+                # exists to surface. Recording nothing systematically
+                # under-reported exactly that pathology. The user's own
+                # exception is re-raised completely unchanged.
+                _safe_record(bound, f"ERROR: {exc.__class__.__name__}: {exc}")
+                raise
             _safe_record(bound, result)
             return result
 
@@ -134,7 +208,11 @@ def audit_tool(fn: Any, session: FrameworkAuditSession):
     @functools.wraps(fn)
     def _sync_wrapped(*args: Any, **kwargs: Any):
         bound = _bind_args(fn, args, kwargs)
-        result = fn(*args, **kwargs)
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            _safe_record(bound, f"ERROR: {exc.__class__.__name__}: {exc}")
+            raise
         _safe_record(bound, result)
         return result
 

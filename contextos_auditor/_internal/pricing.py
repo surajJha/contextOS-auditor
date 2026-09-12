@@ -23,6 +23,11 @@ this table might be; bump it (and the numbers) whenever it's refreshed.
 
 from __future__ import annotations
 
+import re
+
+# Bedrock-style trailing version markers: `-v1:0`, `:0`, `-v2:1`.
+_VERSION_SUFFIX_RE = re.compile(r"(?:-v\d+)?:\d+$")
+
 # Source: https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
 # (community-maintained, sourced from each provider's own pricing page),
 # snapshot taken on the date below. $ per 1,000,000 tokens.
@@ -62,18 +67,78 @@ _PRICING_USD_PER_1M: dict[str, tuple[float, float]] = {
     "deepseek-reasoner": (0.28, 0.42),
 }
 
-# Common prefixes SDKs/adapters prepend that aren't part of the model name
-# itself (e.g. crewai's `LLM(model="openai/gpt-5-mini")`).
-_STRIPPABLE_PREFIXES = ("openai/", "anthropic/", "gemini/", "google/", "azure/", "models/")
+# BUG-C13: the same model arrives as a dozen different strings depending on
+# the SDK, the gateway and the region -- `openai/gpt-4o`,
+# `gpt-4o-2024-08-06`, `us.anthropic.claude-sonnet-4-5-20250929-v1:0`,
+# `openrouter/anthropic/claude-sonnet-4`. Every one of those used to fall
+# through to `None`, so real sessions showed no dollar figure at all.
+#
+# Everything below is deliberately limited to *renaming*, never repricing:
+# prefixes and version suffixes are stripped, and aliases map onto a key
+# that already exists in the table above. No new price point is invented
+# here, so nothing in this block can make the estimate less accurate --
+# only more often available.
+_STRIPPABLE_PREFIXES = (
+    "openai/", "anthropic/", "gemini/", "google/", "azure/", "azure_ai/",
+    "models/", "bedrock/", "vertex_ai/", "openrouter/", "together_ai/",
+    "groq/", "mistral/", "deepseek/", "fireworks_ai/", "ollama/",
+    # Bedrock inference-profile region prefixes and its vendor-qualified ids.
+    "us.", "eu.", "apac.", "anthropic.",
+)
+
+# Alternative spellings of a model already priced above. Validated at import
+# time so a typo here becomes an immediate failure, not a silent None.
+_ALIASES: dict[str, str] = {
+    # OpenAI dated snapshots that carry the same list price as their alias.
+    "gpt-4o-2024-08-06": "gpt-4o",
+    "gpt-4o-2024-11-20": "gpt-4o",
+    "gpt-4o-mini-2024-07-18": "gpt-4o-mini",
+    "gpt-4.1-2025-04-14": "gpt-4.1",
+    "gpt-4.1-mini-2025-04-14": "gpt-4.1-mini",
+    "gpt-4.1-nano-2025-04-14": "gpt-4.1-nano",
+    "chatgpt-4o": "gpt-4o",  # `chatgpt-4o-latest` after suffix stripping
+    # Anthropic undated aliases.
+    "claude-sonnet-4-5": "claude-sonnet-4-5-20250929",
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    "claude-sonnet-4": "claude-sonnet-4-20250514",
+    "claude-opus-4": "claude-opus-4-20250514",
+    "claude-3-opus": "claude-3-opus-20240229",
+    "claude-3-haiku": "claude-3-haiku-20240307",
+    # Google aliases.
+    "gemini-2.5-pro-preview": "gemini-2.5-pro",
+    "gemini-2.5-flash-preview": "gemini-2.5-flash",
+}
+
+for _alias, _target in _ALIASES.items():  # pragma: no cover - import-time guard
+    if _target not in _PRICING_USD_PER_1M:
+        raise RuntimeError(
+            f"pricing.py: alias {_alias!r} points at {_target!r}, which is not in "
+            "_PRICING_USD_PER_1M -- it would silently price as 'unknown'."
+        )
+
+
+def _strip_version_suffix(m: str) -> str:
+    """`-v1:0` / `:0` (Bedrock) and `-latest` are packaging, not pricing."""
+    if m.endswith("-latest"):
+        m = m[: -len("-latest")]
+    m = _VERSION_SUFFIX_RE.sub("", m)
+    return m
 
 
 def _normalize(model: str) -> str:
     m = model.strip().lower()
-    for prefix in _STRIPPABLE_PREFIXES:
-        if m.startswith(prefix):
-            m = m[len(prefix):]
-            break
-    return m
+    # Gateways stack prefixes (`openrouter/anthropic/claude-sonnet-4`,
+    # `bedrock/us.anthropic.claude-...`), so strip repeatedly rather than once.
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _STRIPPABLE_PREFIXES:
+            if m.startswith(prefix):
+                m = m[len(prefix):]
+                changed = True
+                break
+    m = _strip_version_suffix(m)
+    return _ALIASES.get(m, m)
 
 
 def estimate_usd(model: str | None, prompt_tokens: int, completion_tokens: int) -> float | None:

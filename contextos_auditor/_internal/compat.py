@@ -41,9 +41,31 @@ _TESTED: dict[str, _TestedRange] = {
 _warned: set[str] = set()
 
 
-def _parse_version(raw: str) -> tuple[int, ...]:
+def _coerce_version(raw: object) -> str | None:
+    """BUG-C7: `__version__` is not always a string. Several SDKs expose a
+    tuple (`(0, 80, 0)`) or a version object, and the old code called
+    `.split(".")` on it straight from `getattr` -- an AttributeError raised
+    out of every adapter's `attach()`, i.e. the observability add-on taking
+    down the user's agent run, which this module's docstring explicitly
+    promises cannot happen."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, (tuple, list)):
+        return ".".join(str(p) for p in raw)
+    try:
+        return str(raw)
+    except Exception:
+        return None
+
+
+def _parse_version(raw: object) -> tuple[int, ...]:
+    text = _coerce_version(raw) or ""
     parts: list[int] = []
-    for chunk in raw.split(".")[:3]:
+    # Non-numeric segments (`1.2.0rc1`, `2.0.0-beta`, `v3`) contribute their
+    # leading digits, or 0 when there are none -- never an exception.
+    for chunk in text.split(".")[:3]:
         digits = ""
         for ch in chunk:
             if ch.isdigit():
@@ -65,9 +87,14 @@ def installed_version(framework: str) -> str | None:
         return None
     try:
         mod = importlib.import_module(spec.module)
-    except ImportError:
+    except Exception:
+        # BUG-C7: not just ImportError -- a broken/partially-installed SDK
+        # can raise anything at import time, and none of it is worth
+        # failing the user's run over.
         return None
-    return getattr(mod, "__version__", None)
+    # BUG-C7: normalise tuple/object `__version__` values to a string so
+    # every caller (including `doctor`, which prints this) is safe.
+    return _coerce_version(getattr(mod, "__version__", None))
 
 
 def check_compat(framework: str) -> None:
@@ -76,6 +103,17 @@ def check_compat(framework: str) -> None:
     raises -- an out-of-range SDK is a "double-check your numbers" signal,
     not a hard failure, since many minor-version bumps won't actually
     change the event shapes this adapter reads."""
+    # BUG-C7: this runs from every adapter's attach() path, so the whole
+    # body is belt-and-braces guarded. A version *check* failing must never
+    # cost the user their agent run; staying silent is the correct
+    # degradation because the check is advisory in the first place.
+    try:
+        _check_compat(framework)
+    except Exception:
+        return
+
+
+def _check_compat(framework: str) -> None:
     spec = _TESTED.get(framework)
     if spec is None or framework in _warned:
         return
@@ -97,5 +135,6 @@ def check_compat(framework: str) -> None:
         "It will likely still work, but if the numbers you see look wrong, "
         "this version drift is the first thing to check -- run "
         "`contextos-auditor doctor` for the full compatibility report.",
-        stacklevel=3,
+        # BUG-C7: +1 frame because check_compat now delegates to _check_compat.
+        stacklevel=4,
     )

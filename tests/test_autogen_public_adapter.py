@@ -300,3 +300,44 @@ def test_proxy_delegates_every_other_client_method_unchanged(tmp_path):
 
 def test_back_compat_alias_is_the_public_client_wrapper():
     assert wrap_client is AuditingChatCompletionClient
+
+
+def test_stream_records_final_usage_before_returning_it(tmp_path):
+    session = new_session(task="final chunk delivery", out_dir=tmp_path)
+    final = _FakeCreateResult(usage=_FakeUsage(7, 2))
+    client = wrap_client(_FakeClient(chunks=[final]), session)
+
+    async def consume():
+        stream = client.create_stream()
+        assert await anext(stream) is final
+        events = load_events(tmp_path / session.session_id)
+        assert len(events) == 1
+        assert events[0]["usage"]["total_tokens"] == 9
+        session.finish(success=True)
+        await stream.aclose()
+
+    asyncio.run(consume())
+    assert len(load_events(tmp_path / session.session_id)) == 1
+
+
+def test_closing_outer_stream_closes_wrapped_stream_immediately(tmp_path):
+    session = new_session(task="stream close", out_dir=tmp_path)
+    closed = []
+
+    class Client(_FakeClient):
+        async def create_stream(self, *args, **kwargs):
+            try:
+                yield "partial"
+                yield _FakeCreateResult(usage=_FakeUsage(7, 2))
+            finally:
+                closed.append(True)
+
+    async def consume():
+        stream = wrap_client(Client(), session).create_stream()
+        assert await anext(stream) == "partial"
+        await stream.aclose()
+        assert closed == [True]
+
+    asyncio.run(consume())
+    session.finish(success=True)
+    assert load_events(tmp_path / session.session_id) == []

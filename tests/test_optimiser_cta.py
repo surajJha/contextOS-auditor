@@ -49,7 +49,8 @@ def test_terminal_shows_cta_when_real_waste_found(tmp_path):
     out = render_terminal(session_id, meta, result)
     assert "contextos-optimiser" in out
     assert OPTIMISER_CONTACT_EMAIL in out
-    assert "left" in out and "on the table" in out
+    assert "Estimated opportunity:" in out and "Not measured savings." in out
+    assert "eliminates exactly" not in out
 
 
 def test_html_shows_cta_when_real_waste_found(tmp_path):
@@ -59,6 +60,8 @@ def test_html_shows_cta_when_real_waste_found(tmp_path):
     assert 'class="cta"' in out
     assert "contextos-optimiser" in out
     assert f'href="mailto:{OPTIMISER_CONTACT_EMAIL}"' in out
+    assert "Estimated opportunity:" in out and "Not measured savings." in out
+    assert "eliminates exactly" not in out
 
 
 def test_no_cta_when_session_has_no_waste(tmp_path):

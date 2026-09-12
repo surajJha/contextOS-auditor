@@ -2,6 +2,254 @@
 
 All notable changes to `contextos-auditor` are documented here.
 
+## [0.2.1] — 2026-09-12
+
+Corrects the gap between the published 0.2.0 artifact and the verified
+source, plus defects found by testing fresh installs on native Windows,
+macOS and Linux. Zero required runtime dependencies remain unchanged.
+
+### Fixed
+
+- Default session IDs include a UUID so runs created in the same millisecond
+  cannot share capture files. Explicit caller-provided IDs are unchanged.
+- CrewAI detachment drains queued callbacks before finishing the recording.
+  Detached adapters cannot resume capturing later runs.
+- AutoGen streaming records terminal usage before yielding it and closes the
+  underlying stream when the wrapper is closed.
+- OpenAI Agents handles cleanup warnings without a missing-name crash and
+  ignores aggregate task/turn spans rather than counting their usage twice.
+- Published accounting now includes source fixes for clamped per-row waste,
+  zero-usage sessions, synthetic flush turns and duplicate carry horizons.
+- `load_events` warns when unreadable records make totals incomplete.
+- Windows console output escapes characters unsupported by its encoding;
+  captured files and HTML retain UTF-8 text.
+- Failed empty-history HTML writes return an error. Poll intervals must be
+  positive and finite. Error messages link to the actual public issue tracker.
+- Offline tokenizer loading checks the expected cache file and checksum,
+  honors `TIKTOKEN_CACHE_DIR`, and does not treat unrelated cache files as
+  permission to download. Reports distinguish local text estimates from
+  provider-reported usage.
+- Savings and privacy notices no longer promise exact recoverable dollars
+  or deny explicitly enabled OpenTelemetry export.
+- Package `__version__` matches distribution metadata. The CLI supports
+  `--version` for installation diagnostics.
+
+### Installation and compatibility
+
+- Documented same-agent virtual environments, quoted extras, Windows,
+  headless/SSH/container use, and the difference between hook dependencies
+  and full framework runtimes. No standalone binary download is promised.
+- Base package coverage includes Python 3.10–3.14 on Windows, macOS and Linux,
+  plus Python 3.12 in Alpine. Framework SDKs have their own constraints:
+  current CrewAI releases require Python below 3.14.
+- Real-SDK scenarios cover sync, async and streaming paths using deterministic
+  offline model responses, not paid live provider calls.
+- CrewAI and OpenAI process-global hooks support one active audit run per
+  process, not isolation between overlapping independent requests.
+
+## [0.2.0] — 2026-09-06
+
+**Artifact correction (2026-09-12):** some fixes described below existed in
+source but were absent from the published 0.2.0 artifact. That artifact also
+reported internal version 0.1.0. Version 0.2.1 aligns the distribution with
+the corrected source and adds installed-artifact regression gates.
+
+A dedicated bug-bash release, plus the dashboard work that came out of it.
+Four adversarial audits (adapters, recording core, report rendering,
+internals) and a performance audit produced 43 findings; every one was
+reproduced before it was fixed. Test count went from 129 to 329 and branch
+coverage from 85% to 89%.
+
+Nothing here changes the *shape* of the data you already collect, and the
+package still has **zero runtime dependencies**.
+
+### Added
+
+- **`history --html`** writes the run-over-run view as a self-contained
+  page with sparklines for tokens, cost and estimated savings. `history`
+  was stdout-only, so the one view that shows a trend *across* runs could
+  not be shared or attached to a PR — and a fixed-width terminal table is
+  the wrong medium for a trend anyway. No scripts, no network, no build
+  step. Both renderers are driven from a single read pass, so the HTML
+  cannot become a more flattering version of the terminal table: skipped
+  sessions are named, a run with unreadable lines is flagged on its own
+  row, and an unpriced model shows `n/a` instead of being plotted on the
+  floor of the cost chart as a free run.
+
+### Changed — one definition of the theme
+
+- **Dashboard and marketing-site colours can no longer drift.** The two
+  hand-copied the same ten hex values into two `:root` blocks in two
+  languages, and nothing failed when one of them changed. The palette is
+  now defined once in `_internal/theme.py`, the dashboard stylesheet is
+  generated from it at import time (no per-render cost), and a parity test
+  diffs it against `marketing-site/styles.css` so an unmirrored change
+  fails the suite. The differing font stacks are asserted as intentional
+  rather than ignored: the dashboard must render offline, so it never
+  references a CDN font.
+
+### Changed — the live dashboard is now usable *while* it is live
+
+- **`watch --serve` no longer rebuilds the page on every poll.** The SSE
+  client used to assign `document.body.innerHTML` once per poll interval,
+  destroying and recreating every node in the document. The numbers were
+  right but the page was hard to read: it flashed, the scroll position
+  jumped back to the top, text selection was lost, and any `<details>`
+  trace the user had opened to inspect a turn slammed shut roughly once a
+  second. The client now walks the incoming fragment and patches only the
+  subtrees that actually changed, so updating one token count touches one
+  text node and leaves the rest of the document — including scroll
+  position, focus and open disclosures — completely untouched.
+- **A `<details>` you opened stays open.** Disclosure state belongs to the
+  reader, so the `open` attribute is deliberately never synced from the
+  server.
+- **Idle runs no longer push redundant updates.** An agent that hasn't
+  produced a new turn renders identically every poll; `/events` now sends
+  an SSE comment heartbeat instead of re-sending a byte-identical payload.
+  Measured on a 0.3 s poll: 1 payload + 13 heartbeats over 4 s, where
+  previously all 14 frames carried a full re-render.
+- If patching ever fails, the client falls back to the old full-body swap.
+  A dashboard that flashes is a nuisance; one that silently freezes on
+  stale numbers while the run continues is a correctness problem.
+
+The patcher was verified by executing the shipped script in a real DOM
+(node identity across updates, open `<details>`, retained focus, appended
+and removed turns, malformed payloads); the previous client fails 15 of
+those assertions.
+
+### Fixed — numbers that were wrong
+
+These are the serious ones: in each case the auditor printed a confident
+number that was not true.
+
+- **openai-agents recorded ZERO tokens on the SDK's default configuration**:
+  the adapter only handled `generation` spans, but `OpenAIResponsesModel`
+  (the default) emits `response` spans. Every session using the default
+  model client reported no LLM turns at all.
+- **Duplicate-read waste was silently zeroed** for any framework that
+  reports only `total_tokens` (no prompt/completion split), because the
+  clamp used `actual_prompt`, which was 0.
+- **`save_pct` could exceed 100%** (observed: 4998%) — a savings estimate
+  larger than the entire session's spend. Now clamped, and the itemised
+  per-row waste is scaled to match the clamped total at source, so no two
+  sections of one report can disagree.
+- **`finish()` emitted a phantom zero-usage turn** that extended the
+  duplicate-carry horizon by a turn nobody paid for, roughly doubling
+  reported waste on short sessions. Such flush turns are now marked
+  `synthetic` and excluded from billing math.
+- **Duplicate reads were missed** when the same file arrived as `a.py`,
+  `./a.py` and `.\a.py`. Paths are now normalised (case preserved).
+- **The CTA multiplied a token-share percentage by a dollar total.** Waste
+  is duplicated *prompt* context, and input tokens are priced far below
+  output tokens, so this overstated the dollar saving on essentially every
+  session. Waste is now priced at the model's input rate.
+- **Duplicate detection never fired for object arguments**: the call
+  signature was built with `repr()`, which embeds a memory address, so two
+  structurally identical calls always looked different. Signatures are now
+  structural and order-independent.
+- **The pricing table missed nearly every real-world model string** —
+  `gpt-4o-2024-08-06`, `claude-sonnet-4-5`,
+  `us.anthropic.claude-...-v1:0`, `openrouter/...` — so real sessions
+  showed no dollar figure at all. Prefixes, version suffixes and aliases
+  now resolve. This only *renames*; no price point was invented.
+- **Chart and trace rows disagreed**: the per-turn chart plotted
+  prompt+completion while the rows printed `total_tokens`, so a
+  totals-only framework got an empty chart beside real numbers.
+
+### Fixed — crashes and data loss
+
+- **A read-only or full disk crashed the user's agent.**
+  `FrameworkAuditSession.__init__` was the one entry point not guarded, so
+  `PermissionError` propagated straight out of `AuditedCrew(...)`.
+  Auditing now degrades to a visibly disabled no-op session and warns once.
+- **One torn JSONL line made an entire session unreadable** — which is the
+  *normal* state of a file being appended to live. Good turns are now
+  always readable, and the count of skipped lines is reported rather than
+  hidden.
+- **A whole turn was dropped** (and its tool calls re-attributed to the
+  next turn) when a tool argument was not JSON-serialisable, when a usage
+  value was non-integer, or when a tool name was not a string. The rule
+  throughout is now: degrade to a visible zero, never to an invisible
+  omission.
+- **Failed tool calls were invisible**, and LangGraph leaked pending tool
+  state on error. Errors are now recorded as the tool result.
+- **`attach()` was not idempotent** — calling it twice doubled every
+  number. `detach()` failures were silent and could record into a
+  finished session.
+- **AutoGen**: dict-shaped usage recorded as 0/0; a partially consumed
+  `create_stream` lost the entire turn; async tools were mis-detected.
+- **CrewAI adapter had never executed a single line in any test** (a
+  module-level `importorskip` hid it) despite shipping publicly. It now
+  has a full stub-based suite, including 8-thread concurrency.
+- `doctor` crashed on an SDK that failed to import for any reason other
+  than `ImportError`; `--limit` accepted negatives; `--port 99999` raised
+  a raw `OverflowError`; `--html` was silently ignored with `--serve`.
+
+### Fixed — security and privacy
+
+- **Modern API keys were written to disk in plaintext.** The `sk-` pattern
+  required 20+ alphanumerics immediately after the prefix, so every
+  multi-segment key (`sk-proj-…`, `sk-ant-api03-…`) fell straight through.
+  Added Stripe, Google and connection-string patterns; for connection
+  strings and `key = value` assignments only the secret itself is
+  replaced, so the surrounding context stays readable.
+- **Redaction only scrubbed top-level string arguments** — nested dicts and
+  lists passed through raw. It now recurses (depth-bounded, cycle-safe).
+- **Catastrophic backtracking in the PEM pattern** (1.88s on a 128KB tool
+  result, in the agent's hot path) is now bounded and linear.
+- **The local dashboard answered any `Host` header**, so a DNS-rebinding
+  page could read your tool arguments and file contents cross-origin.
+  Non-loopback hosts now get 403 on every route.
+- **`tiktoken` triggered a real network download.** Exact tokenizers are
+  now opt-in (already-cached, or `CONTEXTOS_TIKTOKEN_DOWNLOAD=1`), and the
+  report says out loud when counts are the chars/4 approximation.
+
+### Performance
+
+Measured over 2,000 turns with 3 tool calls each (see `bench_overhead.py`):
+
+| | before | after |
+|---|---|---|
+| CPU per recorded turn | 1.65 ms | **0.40 ms** |
+| p99 per turn | 2.14 ms | **0.62 ms** |
+| CPU for 2,000 turns | 2.93 s | **0.68 s** |
+
+**4.1x faster.** Cost per turn is flat regardless of session length (O(1),
+verified to 4,000 turns), and retained memory stays under 0.3 MB.
+
+- **Redaction was 55% of all auditor CPU.** It now runs a cheap literal
+  pre-filter first and skips any pattern that provably cannot match.
+  Because a wrong pre-filter would leak a secret, the fast path is proven
+  byte-identical to the naive implementation on curated secrets and 3,000
+  fuzzed inputs.
+- **`session.json` was fully rewritten and atomically renamed on every
+  turn** (28% of CPU) although its content is identical except a timestamp
+  nothing reads. Throttled to once a second; terminal writes are never
+  throttled, and `events.jsonl` is still appended synchronously.
+- **OpenTelemetry export delayed interpreter exit by ~7s and leaked a
+  thread per session.** Providers are now shared per endpoint with bounded
+  timeouts: measured 12.33s → 1.33s exit, 5 threads → 1.
+- Two unbounded memory leaks fixed (duplicate-tracking maps, and a
+  100k-entry cache that retained full file bodies).
+
+### Changed
+
+- One-shot HTML exports (`report --html`, `demo --html`,
+  `watch --serve --html`) no longer carry a 2-second meta-refresh and a
+  footer promising updates that would never arrive. `watch --html`, which
+  really does rewrite the file, still refreshes.
+- Optional extras now declare version floors matching the verified compat
+  ranges (`crewai>=0.100`, `openai-agents>=0.1`).
+- An unknown turn number renders as `?` rather than the literal `None`.
+
+### Known limitations
+
+- Under CrewAI's threaded event bus (`ThreadPoolExecutor`), tool calls can
+  be attributed to an adjacent turn. Per-call recording is atomic and
+  nothing is lost or duplicated; only cross-call ordering is
+  best-effort. This is covered by an explicit concurrency test rather than
+  papered over.
+
 ## [0.1.1] — 2026-09-04
 
 ### Fixed

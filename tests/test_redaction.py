@@ -117,3 +117,92 @@ def test_env_var_enables_redaction_without_explicit_kwarg(tmp_path, monkeypatch)
     session.finish(success=True)
     events = (tmp_path / session.session_id / "events.jsonl").read_text()
     assert "sk-abcdefghijklmnopqrstuvwxyz123456" not in events
+
+
+def test_c2_modern_key_formats_are_redacted():
+    """BUG-C2: multi-segment / prefixed key shapes that the original
+    patterns let through verbatim."""
+    # Generate the fake credential without embedding a secret-shaped literal.
+    stripe_key = "sk_live_" + "x" * 32
+    cases = [
+        ("OPENAI_API_KEY=sk-proj-abc123DEF456-ghi789JKL012mno345PQR678stu",
+         "sk-proj-abc123DEF456-ghi789JKL012mno345PQR678stu"),
+        ("ANTHROPIC_API_KEY=sk-ant-api03-AbCdEfghijklmnopqrstuvwx",
+         "sk-ant-api03-AbCdEfghijklmnopqrstuvwx"),
+        (f"STRIPE={stripe_key}", stripe_key),
+        ("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+         "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
+        ("GOOGLE=AIzaSyD-1234567890abcdefghijklmnopqrstu",
+         "AIzaSyD-1234567890abcdefghijklmnopqrstu"),
+    ]
+    for text, secret in cases:
+        scrubbed = redact_text(text)
+        assert secret not in scrubbed, text
+        assert "[REDACTED]" in scrubbed, text
+
+
+def test_c2_connection_string_password_redacted_but_host_kept():
+    scrubbed = redact_text("postgres://admin:hunter2@db.prod.internal:5432/app")
+    assert "hunter2" not in scrubbed
+    assert "db.prod.internal:5432/app" in scrubbed  # host is signal, not secret
+
+
+def test_c2_redaction_is_deterministic_and_preserves_file_content():
+    body = "service: bot\nversion: 1\nfeatures:\n  x: false\n" * 20
+    assert redact_text(body) == redact_text(body) == body
+
+
+def test_c3_nested_args_are_redacted():
+    """BUG-C3: only top-level strings used to be scrubbed."""
+    from contextos_auditor._internal.redact import redact_args
+
+    out = redact_args(
+        {
+            "headers": {"Authorization": "Bearer abc123def456ghi789jkl"},
+            "list": ["sk-abcdefghijklmnopqrstuvwxyz123456"],
+            "tup": ("sk-abcdefghijklmnopqrstuvwxyz123456",),
+        }
+    )
+    dumped = json.dumps(out)
+    assert "abc123def456ghi789jkl" not in dumped
+    assert "sk-abcdefghijklmnopqrstuvwxyz123456" not in dumped
+    assert isinstance(out["headers"], dict)
+    assert isinstance(out["list"], list)
+    assert isinstance(out["tup"], tuple)
+
+
+def test_c3_deeply_nested_and_self_referential_args_do_not_raise():
+    from contextos_auditor._internal.redact import redact_args
+
+    deep: dict = {}
+    node = deep
+    for _ in range(5000):
+        node["next"] = {}
+        node = node["next"]
+    redact_args(deep)  # must not RecursionError
+
+    cyclic: dict = {"k": "v"}
+    cyclic["self"] = cyclic
+    redact_args(cyclic)  # must not hang or blow the stack
+
+
+def test_c4_adversarial_pem_input_redacts_quickly():
+    """BUG-C4: unbounded PEM body was O(n^2) -- 128KB took ~1.9s in the
+    agent's hot path."""
+    import time
+
+    anchor = "-----BEGIN RSA PRIVATE KEY-----\n"
+    payload = anchor * (128 * 1024 // len(anchor))
+    start = time.perf_counter()
+    redact_text(payload)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"redaction took {elapsed:.2f}s on 128KB adversarial input"
+
+
+def test_c4_real_pem_block_is_still_redacted():
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        + "MIIEowIBAAKCAQEAx7Rn\n" * 20
+        + "-----END RSA PRIVATE KEY-----"
+    )
+    assert "MIIEowIBAAKCAQEAx7Rn" not in redact_text(pem)

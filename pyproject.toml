@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "contextos-auditor"
-version = "0.1.1"
-description = "The free, local-only Agent Auditor -- attach one line to a CrewAI/LangGraph/AutoGen/OpenAI-Agents-SDK agent and watch its real token cost live. No signup, no telemetry, no data leaves your machine. Free for any use including commercial (PolyForm Shield, noncompete only) -- see LICENSE."
+version = "0.2.1"
+description = "Local-first token usage auditing and estimated costs for CrewAI, LangGraph, AutoGen and OpenAI Agents SDK. No signup; optional opt-in OpenTelemetry export. Free for commercial use under PolyForm Shield 1.0.0; see LICENSE."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -19,6 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Topic :: Software Development :: Libraries",
@@ -29,13 +30,17 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-crewai = ["crewai>=0.80"]
+# BUG-D1: these floors must not sit below the ranges `_internal/compat.py`
+# has actually been verified against, or `pip install contextos-auditor[X]`
+# resolves to a version that immediately warns the user their numbers may
+# be wrong. Keep the two in sync.
+crewai = ["crewai>=0.100"]
 langgraph = ["langchain-core>=0.3"]
 autogen = ["autogen-core>=0.4"]
-openai-agents = ["openai-agents>=0.0.3"]
+openai-agents = ["openai-agents>=0.1"]
 tiktoken = ["tiktoken>=0.7"]
 otel = ["opentelemetry-sdk>=1.20", "opentelemetry-exporter-otlp-proto-http>=1.20"]
-all = ["crewai>=0.80", "langchain-core>=0.3", "autogen-core>=0.4", "openai-agents>=0.0.3", "tiktoken>=0.7"]
+all = ["crewai>=0.100", "langchain-core>=0.3", "autogen-core>=0.4", "openai-agents>=0.1", "tiktoken>=0.7"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]
@@ -49,3 +54,17 @@ Changelog = "https://github.com/surajJha/contextOS-auditor/blob/main/CHANGELOG.m
 
 [tool.hatch.build.targets.wheel]
 packages = ["contextos_auditor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `--strict-markers` turns a typo'd marker into an error instead of a
+# silently-unregistered one; `-ra` shows why anything was skipped, which is
+# how the crewai adapter managed to sit at 0% executed coverage while the
+# suite reported green.
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = [
+  # The adapters warn (once per process) when they drop an observation.
+  # Tests that expect a warning assert on it explicitly; anything else
+  # warning is a signal we want to see rather than scroll past.
+  "default",
+]

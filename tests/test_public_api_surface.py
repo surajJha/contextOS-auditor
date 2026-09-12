@@ -6,6 +6,9 @@ every branch, but the test suite itself must not hard-require any of them."""
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 
@@ -15,6 +18,18 @@ def test_top_level_package_imports_with_zero_framework_deps():
     assert contextos_auditor.__version__
     assert hasattr(contextos_auditor, "shadow_session")
     assert hasattr(contextos_auditor, "load_events")
+
+
+def test_public_version_matches_package_metadata():
+    import contextos_auditor
+
+    manifest = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    versions = re.findall(
+        r'^version\s*=\s*"([^"]+)"\s*$',
+        manifest.read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
+    assert versions == [contextos_auditor.__version__]
 
 
 def test_crewai_public_api_surface():

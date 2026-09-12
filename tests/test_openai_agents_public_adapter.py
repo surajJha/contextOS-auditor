@@ -21,6 +21,7 @@ import sys
 import threading
 import types
 import warnings
+from types import SimpleNamespace
 
 import pytest
 
@@ -104,6 +105,19 @@ def test_span_processing_records_turns_and_tool_calls(tmp_path):
     assert out["save_pct"] > 0
 
 
+@pytest.mark.parametrize("kind", ["turn", "task"])
+def test_aggregate_usage_spans_do_not_warn_or_double_count(tmp_path, kind):
+    adapter = _adapter(tmp_path)
+    adapter.on_span_end(_generation({"input_tokens": 10, "output_tokens": 3}))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        adapter.on_span_end(_Span(_SpanData(type=kind, usage={"input_tokens": 10, "output_tokens": 3})))
+    assert not caught
+    events = load_events(tmp_path / adapter.session.session_id)
+    assert len(events) == 1
+    assert events[0]["usage"]["total_tokens"] == 13
+
+
 def test_tool_input_json_is_parsed_so_the_estimator_can_read_path_and_content(tmp_path):
     adapter = _adapter(tmp_path)
     adapter.on_span_end(
@@ -180,9 +194,14 @@ def test_span_without_usage_attribute_at_all_is_still_counted_as_a_turn(tmp_path
 
 def test_unrelated_span_types_are_ignored(tmp_path):
     """Agent/handoff/guardrail spans carry no usage and no tool call; they
-    must not create phantom turns."""
+    must not create phantom turns.
+
+    BUG-A1: "response" was removed from this list -- it is the SDK's
+    default LLM span type and is now deliberately recorded as a turn (see
+    `test_response_span_*`), so listing it here would re-encode the
+    zero-tokens bug."""
     adapter = _adapter(tmp_path)
-    for span_type in ("agent", "handoff", "guardrail", "response", None):
+    for span_type in ("agent", "handoff", "guardrail", None):
         adapter.on_span_end(_Span(_SpanData(type=span_type, name="x")))
     adapter.on_span_end(_Span(None))  # span with no span_data at all
     adapter.detach(success=True)
@@ -261,6 +280,26 @@ def test_detach_removes_only_our_processor(tmp_path, monkeypatch):
     assert provider._multi_processor._processors == (someone_elses,)
 
 
+def test_finished_adapter_cannot_reattach_to_global_provider(tmp_path, monkeypatch):
+    provider = _fake_agents_tracing(monkeypatch)
+    audit = attach(task="reattach finished", out_dir=tmp_path)
+    audit.detach(success=True)
+    audit.attach()
+    assert provider._multi_processor._processors == ()
+    audit.on_span_end(_generation({"input_tokens": 999, "output_tokens": 1}))
+    assert load_events(tmp_path / audit.session.session_id) == []
+
+
+def test_repeated_detach_finishes_only_once(tmp_path, monkeypatch):
+    _fake_agents_tracing(monkeypatch)
+    audit = attach(task="repeat detach", out_dir=tmp_path)
+    finishes = []
+    monkeypatch.setattr(audit.session, "finish", lambda **kwargs: finishes.append(kwargs))
+    audit.detach(success=True)
+    audit.detach()
+    assert finishes == [{"success": True, "error": ""}]
+
+
 def test_attach_writes_to_project_local_contextos_dir_by_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _fake_agents_tracing(monkeypatch)
@@ -305,3 +344,65 @@ def test_an_internal_auditor_failure_never_breaks_the_agent_run(tmp_path, monkey
 
 def test_back_compat_alias_is_the_public_attach():
     assert attach_openai_agents_auditor is attach
+
+
+def test_a_failing_unregistration_warns_and_still_finishes_the_session(
+    tmp_path, monkeypatch
+):
+    """BUG-A9: `detach()` reaches into SDK privates and warns if that fails --
+    but the warning helper was never imported into this module, so the
+    `except` handler raised `NameError` instead of warning.
+
+    `detach()` is deliberately NOT `@guarded` (it is the caller's explicit
+    'the run ended' signal, not an SDK callback), so that NameError escaped
+    into the user's own code *and* skipped `session.finish()` below it,
+    leaving the session permanently unfinished. Both halves are asserted
+    here: the run survives, and the session is still closed out.
+    """
+    provider = _fake_agents_tracing(monkeypatch)
+    audit = attach(task="detach failure", out_dir=tmp_path)
+
+    class _ExplodingLock:
+        def __enter__(self):
+            raise RuntimeError("SDK internals moved")
+
+        def __exit__(self, *_a):
+            return False
+
+    provider._multi_processor._lock = _ExplodingLock()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        audit.detach(success=True)
+
+    assert any("openai_agents.detach" in str(w.message) for w in caught), (
+        "the unregistration failure must surface as a warning, not a NameError"
+    )
+
+    meta = json.loads((tmp_path / audit.session.session_id / "session.json").read_text())
+    assert meta["status"] == "finished"
+
+
+def test_an_unhandled_span_carrying_usage_warns_about_under_counting(tmp_path):
+    """BUG-A9, second call site: a span type the adapter does not handle but
+    which reports usage means the SDK grew a new LLM shape and this audit is
+    now silently under-counting tokens. That warning is an honesty mechanism,
+    and it was unreachable -- `_warn_once` raised `NameError`, which
+    `@guarded` then relabelled as a generic internal error, so the specific
+    'your token counts are incomplete' signal never reached anyone.
+    """
+    audit = OpenAIAgentsAuditAdapter(task="unhandled span", out_dir=tmp_path)
+
+    span = SimpleNamespace(
+        span_data=SimpleNamespace(
+            type="some_future_span", usage={"input_tokens": 10, "output_tokens": 2}
+        )
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        audit.on_span_end(span)
+
+    messages = [str(w.message) for w in caught]
+    assert any("unhandled_span_type" in m for m in messages), messages
+    assert not any("NameError" in m for m in messages), messages

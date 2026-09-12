@@ -1,7 +1,4 @@
-"""Vendored from `dashboard/adapters/base.py` in the toku monorepo --
-unchanged logic (default session directory adjusted for standalone install:
-`./.contextos/audit` instead of `./out/audit`). See this package's README
-for the vendoring note.
+"""Canonical framework session recording and normalization.
 
 Each framework adapter (crewai.py, langgraph.py, openai_agents.py,
 autogen.py) hooks that framework's native callback/event/tracing system and
@@ -21,6 +18,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 import warnings
 from pathlib import Path
 from typing import Any
@@ -61,11 +59,23 @@ _READ_ALIASES = {"read_file", "readfile", "read_text_file"}
 _warned_labels: set[str] = set()
 
 
+def _nonfatal_warning(message: str, *, stacklevel: int = 3) -> None:
+    try:
+        warnings.warn(message, stacklevel=stacklevel + 1)
+    except Warning:
+        # A host application's -W error policy must not turn an observer's
+        # diagnostic into a failed agent run.
+        try:
+            print(message, file=sys.stderr)
+        except Exception:
+            pass
+
+
 def _warn_once(label: str, exc: Exception) -> None:
     if label in _warned_labels:
         return
     _warned_labels.add(label)
-    warnings.warn(
+    _nonfatal_warning(
         f"contextos-auditor: internal error in {label}, this observation was "
         f"dropped but your agent's real run is unaffected ({exc.__class__.__name__}: {exc}). "
         "This warning only appears once per process; run with "
@@ -93,13 +103,70 @@ def guarded(label: str):
     return decorator
 
 
-def _normalize_tool_name(name: str) -> str:
-    key = (name or "").strip().lower()
+def _normalize_tool_name(name: Any) -> str:
+    # BUG-B2: frameworks pass enums, ints and tool objects here, not just
+    # str. `(name or "").strip()` raised AttributeError on those, @guarded
+    # swallowed it, and the whole tool call vanished -- so a duplicate read
+    # or a write_file became invisible to the estimator. Coerce instead.
+    if name is None:
+        return "tool"
+    text = name if isinstance(name, str) else str(name)
+    key = text.strip().lower()
     if key in _WRITE_ALIASES:
         return "write_file"
     if key in _READ_ALIASES:
         return "read_file"
-    return name or "tool"
+    return text.strip() or "tool"
+
+
+def _coerce_tokens(value: Any) -> int:
+    """Best-effort non-negative int for a provider-reported token count.
+
+    BUG-B9/B1: a bogus value (a string, a Decimal, None, a negative) used
+    to raise out of `record_llm` into `@guarded`, which discarded the
+    ENTIRE turn -- its real token counts and every buffered tool call with
+    it. Losing a turn silently is far worse than showing a zero, because
+    the tool's whole promise is that its numbers are trustworthy. Degrade
+    to a visible 0 instead, and never let a negative count through.
+    """
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
+def _pick_tokens(usage: dict[str, Any], primary: str, fallback: str) -> int:
+    """BUG-B10: key-presence, not truthiness.
+
+    `usage.get(primary) or usage.get(fallback)` treated a legitimate
+    `prompt_tokens: 0` (a fully cache-hit turn) as "missing" and silently
+    took the other field instead.
+    """
+    if primary in usage and usage[primary] is not None:
+        return _coerce_tokens(usage[primary])
+    return _coerce_tokens(usage.get(fallback))
+
+
+def _jsonable(value: Any) -> Any:
+    """Make tool args safe to `json.dumps` before they reach the writer.
+
+    BUG-B1: `emit_turn` serialises with `default=str`, which rescues odd
+    *values* but not odd *keys* (a tuple or object key still raises
+    TypeError). That exception escaped into `@guarded` and destroyed the
+    whole turn -- in the repro, 5,000 prompt tokens silently disappeared
+    because of one unusual tool argument. Normalise here so a weird arg
+    costs at most that one argument's fidelity.
+    """
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def _extract_path(args: dict[str, Any]) -> str | None:
@@ -142,9 +209,36 @@ def _announce_capture(session_dir: Path, redacting: bool) -> None:
         rel = str(session_dir)
     print(
         f"[contextos-auditor] recording this run to {rel} ({scrub}).\n"
-        f"[contextos-auditor] nothing leaves your machine. add '.contextos/' to .gitignore.",
+        "[contextos-auditor] captures stay local unless OpenTelemetry export is enabled. "
+        "add '.contextos/' to .gitignore.",
         file=sys.stderr,
     )
+
+
+class _DisabledSession:
+    """Stand-in used when the audit directory cannot be created or written.
+
+    BUG-B8: `FrameworkAuditSession.__init__` is the one entry point that is
+    not wrapped in `@guarded`, so a read-only cwd, a full disk or a
+    sandboxed container used to raise `PermissionError`/`OSError` straight
+    out of the user's `AuditedCrew(...)` line and take down an agent run
+    that had nothing to do with us. The auditor is an observer: it must
+    never be the reason someone's agent fails to start. We degrade to a
+    no-op session and say so once, loudly, on stderr -- a visibly disabled
+    auditor is honest, a crashed user program is not.
+    """
+
+    def __init__(self, session_id: str, model: str) -> None:
+        self.dir = Path(os.devnull)
+        self.session_id = session_id
+        self.model = model
+        self.disabled = True
+
+    def emit_turn(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def finish(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 class FrameworkAuditSession:
@@ -163,16 +257,33 @@ class FrameworkAuditSession:
         otel_endpoint: str | None = None,
         redact_secrets: bool | None = None,
     ) -> None:
-        root = out_dir or (Path.cwd() / ".contextos" / "audit")
-        sid = session_id or f"{framework}-{int(time.time() * 1000)}"
-        self._session = AuditSession(
-            root,
-            session_id=sid,
-            model=model or "unknown",
-            task=task[:240],
-            arm=arm,
-            framework=framework,
-        )
+        sid = session_id or f"{framework}-{int(time.time() * 1000)}-{uuid.uuid4().hex}"
+        try:
+            root = out_dir or (Path.cwd() / ".contextos" / "audit")
+            self._session: Any = AuditSession(
+                root,
+                session_id=sid,
+                model=model or "unknown",
+                task=task[:240],
+                arm=arm,
+                framework=framework,
+            )
+        except Exception as exc:  # noqa: BLE001 - see _DisabledSession
+            # BUG-B8: Path.cwd() raises if the cwd was deleted; mkdir and the
+            # first _write_session raise on a read-only mount, a full disk or
+            # a restrictive sandbox. Any of those used to propagate into the
+            # caller's agent construction.
+            if "session-disabled" not in _warned_labels:
+                _warned_labels.add("session-disabled")
+                _nonfatal_warning(
+                    "contextos-auditor: could not create the audit directory "
+                    f"({type(exc).__name__}: {exc}). Auditing is DISABLED for this "
+                    "process so your agent run is unaffected; no session data will be "
+                    "written and the dashboard will show nothing for this run. Pass "
+                    "out_dir=... (or set a writable cwd) to record it.",
+                    stacklevel=3,
+                )
+            self._session = _DisabledSession(sid, model or "unknown")
         self._turn = 0
         self._pending_tools: list[dict[str, Any]] = []
         # AUDIT-001: opt-in confinement for kit/tools.py's path-touching
@@ -209,7 +320,10 @@ class FrameworkAuditSession:
         # None (no object at all) when neither is set, so every existing
         # caller pays nothing for this feature's existence.
         endpoint = otel_endpoint or os.environ.get("CONTEXTOS_OTEL_ENDPOINT")
-        self._otel = build_exporter(endpoint, framework=framework)
+        try:
+            self._otel = build_exporter(endpoint, framework=framework)
+        except Exception:  # noqa: BLE001 - optional export must never block startup
+            self._otel = None
         # AUD-016 / LNCH-004: pattern-based secret scrub, ON BY DEFAULT --
         # see _internal/redact.py's module docstring for exactly what this
         # does and does not do (never blanks read/write_file content
@@ -218,7 +332,11 @@ class FrameworkAuditSession:
         if redact_secrets is None:
             redact_secrets = os.environ.get("CONTEXTOS_REDACT_SECRETS", "1") not in ("0", "false", "False", "no", "off")
         self._redact_secrets = redact_secrets
-        _announce_capture(self._session.dir, redact_secrets)
+        if not getattr(self._session, "disabled", False):
+            try:
+                _announce_capture(self._session.dir, redact_secrets)
+            except Exception:  # noqa: BLE001 - a courtesy notice, never fatal
+                pass
 
     @property
     def session_id(self) -> str:
@@ -234,7 +352,7 @@ class FrameworkAuditSession:
         """
         args_dict = args if isinstance(args, dict) else {"value": args}
         norm_name = _normalize_tool_name(name)
-        row: dict[str, Any] = {"name": norm_name, "args": args_dict}
+        row: dict[str, Any] = {"name": norm_name, "args": _jsonable(args_dict)}
         # KIT-504: every tool's result_text gets forwarded (audit_emit.py
         # bounds it further before persisting), not just read_file's — Kit's
         # own lever tools (edit_file/smart_patch/grep/list_dir/find_def/
@@ -242,6 +360,10 @@ class FrameworkAuditSession:
         # confirmation string, and dashboard.shadow_kit's levers_fired needs
         # that text to tell "fired" from "merely called, but failed/no-op".
         row["result_text"] = result if isinstance(result, str) else str(result)
+        if norm_name == "read_file":
+            path = _extract_path(args_dict)
+            if path is not None:
+                row["args"] = {**row["args"], "path": path}
         if norm_name == "write_file":
             path = _extract_path(args_dict)
             content = _extract_write_content(args_dict)
@@ -266,11 +388,18 @@ class FrameworkAuditSession:
         if model and self._session.model in (None, "unknown"):
             self._session.model = model
         usage = usage or {}
-        prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-        completion = int(
-            usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        prompt = _pick_tokens(usage, "prompt_tokens", "input_tokens")
+        completion = _pick_tokens(usage, "completion_tokens", "output_tokens")
+        if "total_tokens" in usage and usage["total_tokens"] is not None:
+            total = _coerce_tokens(usage["total_tokens"])
+        else:
+            total = prompt + completion
+        # A total-only or partially split turn cannot be priced at separate
+        # input/output rates without inventing the missing allocation.
+        estimated_usd = (
+            estimate_usd(self._session.model, prompt, completion)
+            if prompt + completion >= total else None
         )
-        total = int(usage.get("total_tokens") or (prompt + completion))
         with self._lock:
             self._turn += 1
             turn = self._turn
@@ -285,7 +414,7 @@ class FrameworkAuditSession:
             },
             cost={
                 "total_nano_aiu": 0,
-                "estimated_usd": estimate_usd(self._session.model, prompt, completion),
+                "estimated_usd": estimated_usd,
             },
             tool_calls=tool_calls,
         )
@@ -298,7 +427,7 @@ class FrameworkAuditSession:
                 prompt_tokens=prompt,
                 completion_tokens=completion,
                 total_tokens=total,
-                estimated_usd=estimate_usd(self._session.model, prompt, completion),
+                estimated_usd=estimated_usd,
             )
 
     @guarded("FrameworkAuditSession.finish")
@@ -315,5 +444,11 @@ class FrameworkAuditSession:
                 usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                 cost={"total_nano_aiu": 0},
                 tool_calls=leftover,
+                # BUG-B5: this is not a model round-trip, just a flush of
+                # tool calls that happened after the last LLM call. Marking
+                # it keeps shadow_kit from extending the duplicate-carry
+                # horizon by a turn nobody paid for (which doubled reported
+                # waste on short sessions).
+                synthetic=True,
             )
         self._session.finish(success=success, error=error)
