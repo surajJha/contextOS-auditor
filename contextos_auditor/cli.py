@@ -14,12 +14,16 @@
     contextos-auditor history                # list past sessions + aggregate stats
     contextos-auditor doctor                 # which framework SDKs/hooks are
                                               # available in this environment
+    contextos-auditor setup                  # guided integration, no automatic installs
+    contextos-auditor troubleshoot           # symptom-based recovery steps
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,22 +31,22 @@ from typing import Any
 
 from contextos_auditor import __version__
 from contextos_auditor._internal.audit_emit import load_events_with_stats
-from contextos_auditor._internal.compat import _TESTED, _parse_version, installed_version
+from contextos_auditor._internal.diagnostics import (
+    FRAMEWORKS as _FRAMEWORKS,
+    collect_diagnostics,
+    support_report,
+)
+from contextos_auditor._internal.onboarding import (
+    TOPICS,
+    setup_guide,
+    troubleshooting_guide,
+)
 from contextos_auditor._internal.shadow_kit import shadow_session
 from contextos_auditor.report import render_html, render_terminal
 from contextos_auditor.server import serve_session
 
 _DEFAULT_AUDIT_ROOT = Path.cwd() / ".contextos" / "audit"
 _DEFAULT_POLL_SECONDS = 5.0
-
-# name -> (import path, extra name, compat key) used by `doctor`
-_FRAMEWORKS: dict[str, tuple[str, str, str]] = {
-    "crewai": ("crewai", "crewai", "crewai"),
-    "langgraph": ("langchain_core", "langgraph", "langgraph"),
-    "openai-agents": ("agents", "openai-agents", "openai_agents"),
-    "autogen": ("autogen_core", "autogen", "autogen"),
-}
-
 
 def find_running_session(audit_root: Path) -> Path | None:
     # BUG-C14: a concurrent agent can rotate/delete a session directory
@@ -66,8 +70,6 @@ def _safe_mtime(path: Path) -> float:
 
 
 def read_session_meta(session_dir: Path) -> dict[str, Any]:
-    import json
-
     meta_path = session_dir / "session.json"
     if not meta_path.is_file():
         return {}
@@ -115,7 +117,8 @@ def _wait_for_session_dir(args: argparse.Namespace, poll_seconds: float = 1.0) -
     print(
         f"No session found yet under {args.audit_root} -- waiting for one to start "
         f"(Ctrl-C to stop).\nAttach the Auditor in your agent code first -- see "
-        f"`contextos-auditor doctor` for the exact snippet for your framework."
+        "`contextos-auditor setup` for integration templates, or "
+        "`contextos-auditor doctor` for environment checks."
     )
     try:
         waited = 0.0
@@ -131,10 +134,11 @@ def _wait_for_session_dir(args: argparse.Namespace, poll_seconds: float = 1.0) -
                 nudged = True
                 print(
                     "\nStill nothing after 30s. Two things worth checking:\n"
-                    "  - is the auditor actually attached? `contextos-auditor doctor`\n"
+                    "  - is the auditor actually attached? `contextos-auditor setup`\n"
                     "  - is your agent running from this directory? sessions are written\n"
                     f"    under {args.audit_root}, relative to the agent's working directory\n"
-                    "\nOr, to see what this looks like without an agent at all:\n"
+                    "\nMore help: `contextos-auditor troubleshoot no-data`\n"
+                    "Or, to see what this looks like without an agent at all:\n"
                     "  contextos-auditor demo --serve\n"
                 )
             session_dir = _resolve_session_dir(args)
@@ -177,7 +181,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
             print(
                 f"No session found under {args.audit_root} (no */events.jsonl yet).\n"
                 f"Attach the Auditor in your agent code first -- see "
-                f"`contextos-auditor doctor` for the exact snippet for your framework."
+                "`contextos-auditor setup` for integration templates, or "
+                "`contextos-auditor doctor` for environment checks."
             )
             return 1
     else:
@@ -259,6 +264,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
             )
             print(f"Wrote {out_path}")
         print(f"Serving {sid} at http://127.0.0.1:{args.port} (Ctrl-C to stop)\n")
+        print("This is synthetic data. To connect your own agent, run `contextos-auditor setup`.\n")
         return serve_session(session_dir, poll_interval=_DEFAULT_POLL_SECONDS, port=args.port)
 
     print(render_terminal(sid, meta, result))
@@ -269,10 +275,11 @@ def cmd_demo(args: argparse.Namespace) -> int:
         print(f"\nWrote {out_path}")
     print(
         f"\nThat was a demo. To do this on your own agent:\n"
-        f"  1. `contextos-auditor doctor`  -- get the one-line snippet for your framework\n"
+        f"  1. `contextos-auditor setup`   -- choose your framework and follow the template\n"
         f"  2. run your agent\n"
         f"  3. `contextos-auditor watch`   -- live view of the real thing\n"
-        f"\nDelete the demo data any time: rm -rf {session_dir}"
+        f"\nDemo files are in this synthetic session directory: {session_dir}\n"
+        "You can remove that directory with your file manager when you no longer need it."
     )
     return 0
 
@@ -433,60 +440,125 @@ def _write_history_html(
 
 
 
-def cmd_doctor(_args: argparse.Namespace) -> int:
-    print("contextos-auditor doctor -- framework hook availability\n")
-    any_found = False
-    broken: list[str] = []
-    for name, (module, extra, compat_key) in _FRAMEWORKS.items():
-        try:
-            __import__(module)
-            version = installed_version(compat_key)
-            spec = _TESTED.get(compat_key)
-            status = "ready to attach"
-            if version and spec:
-                v = _parse_version(version)
-                if not (spec.min_version <= v < spec.max_version_exclusive):
-                    lo = ".".join(str(p) for p in spec.min_version)
-                    hi = ".".join(str(p) for p in spec.max_version_exclusive)
-                    status = f"detected {version} -- OUTSIDE tested range [{lo}, {hi}), double-check your numbers"
-                else:
-                    status = f"detected {version} -- within tested range, ready to attach"
-            print(f"  [ok]      {name:<14} SDK {status}")
-            any_found = True
-        except ImportError:
-            print(f'  [missing] {name:<14} not installed -- `python -m pip install "contextos-auditor[{extra}]"`')
-        except Exception as e:
-            # BUG-C6: a broken transitive dependency (common with
-            # crewai/autogen) raises something other than ImportError
-            # straight out of the one command whose whole job is to
-            # diagnose a sick environment. Report the row and keep going
-            # through the remaining frameworks.
-            #
-            # Exit code stays 0 deliberately: `doctor` reports on optional
-            # extras, and a non-zero exit would make "one broken optional
-            # SDK" indistinguishable from "the auditor itself is broken"
-            # for anyone running it in CI or a health check. The [broken]
-            # row is the signal; the exit code is about doctor itself.
-            print(f"  [broken]  {name:<14} {type(e).__name__}: {e}")
-            broken.append(name)
-    if broken:
-        print(
-            f"\n{len(broken)} SDK(s) are installed but fail to import: {', '.join(broken)}.\n"
-            "That's an environment problem in those packages, not in the auditor --\n"
-            "try reinstalling them. Everything else above still works."
-        )
-    if not any_found:
-        print(
-            "\nNo supported framework SDK found in this environment. Install one of the\n"
-            'extras above, or run `python -m pip install "contextos-auditor[all]"` to get every hook.'
-        )
-    print(
-        "\nSnippets:\n"
-        "  crewai:         from contextos_auditor.crewai import attach\n"
-        "  langgraph:      from contextos_auditor.langgraph import AuditorCallback\n"
-        "  openai-agents:  from contextos_auditor.openai_agents import attach\n"
-        "  autogen:        from contextos_auditor.autogen import new_session, wrap_client, audit_tool\n"
+def cmd_doctor(args: argparse.Namespace) -> int:
+    if not getattr(args, "json", False):
+        print("Checking this Python environment and local recording paths...", flush=True)
+    report = collect_diagnostics(
+        Path(getattr(args, "audit_root", _DEFAULT_AUDIT_ROOT)),
+        framework=getattr(args, "framework", None),
+        check_recording=getattr(args, "check_recording", False),
     )
+    shared = support_report(report)
+    for check in shared["checks"]:
+        if check["id"].startswith("sdk:"):
+            check["module"] = _FRAMEWORKS[check["id"].removeprefix("sdk:")][0]
+    payload = json.dumps(shared, indent=2, ensure_ascii=True) + "\n"
+    output = getattr(args, "output", None)
+    if output:
+        # Refuse to overwrite recordings or an earlier support report by accident.
+        with Path(output).open("x", encoding="utf-8") as handle:
+            handle.write(payload)
+    if getattr(args, "json", False):
+        print(payload, end="")
+        if output:
+            print(f"Support report written to {output}. Review before sharing; nothing uploaded.",
+                  file=sys.stderr)
+    else:
+        print("contextos-auditor doctor -- environment and recording diagnostics\n")
+        for name, value in report["environment"].items():
+            print(f"  {name}: {value}")
+        print()
+        for check in report["checks"]:
+            label = check["status"]
+            if check["id"].startswith("sdk:") and label == "error":
+                label = "broken"
+            version = ""
+            if check["id"].startswith("sdk:") and check.get("version"):
+                module = _FRAMEWORKS[check["id"].removeprefix("sdk:")][0]
+                version = f" ({module} version {check['version']})"
+            print(f"  [{label}] {check['id']}{version}: {check['message']}")
+            if check.get("detail"):
+                print(f"    Detail (local only): {check['detail']}")
+            if check.get("action"):
+                print(f"    Next: {check['action']}")
+        if report["healthy"]:
+            print("\nResult: Required checks passed. Review any optional SDK issues above.")
+        else:
+            print("\nResult: Required checks failed. Follow the next actions above before proceeding.")
+        print(
+            "\nThese checks do not prove your application's SDK hooks are attached.\n"
+            "Run one small real task and confirm a session appears and turns increase.\n"
+            "Integration templates: contextos-auditor setup --framework <name>\n"
+            "Guided recovery: contextos-auditor troubleshoot\n"
+            "Automation: add --strict for a nonzero exit when required checks fail.\n"
+            "Share --output JSON, not this local console output or raw recordings."
+        )
+        if output:
+            print(f"\nSupport report written to {output}. Review before sharing; nothing uploaded.")
+    return 1 if getattr(args, "strict", False) and not report["healthy"] else 0
+
+
+def _choose(title: str, choices: dict[str, str]) -> str | None:
+    print(title)
+    keys = list(choices)
+    for index, (key, label) in enumerate(choices.items(), 1):
+        print(f"  {index}. {label} ({key})")
+    print("  0. Cancel")
+    while True:
+        try:
+            value = input("Choose a number or name: ").strip().lower()
+        except EOFError:
+            print("\nInput closed. Cancelled; nothing changed.")
+            return None
+        if value in ("0", "q", "quit"):
+            print("Cancelled; nothing changed.")
+            return None
+        if value in choices:
+            return value
+        if value.isascii() and value.isdecimal() and len(value) <= 2:
+            index = int(value) - 1
+            if 0 <= index < len(keys):
+                return keys[index]
+        print("Choose one of the listed numbers or names, or 0 to cancel.")
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    framework = args.framework
+    if framework is None:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print(
+                "Setup needs a selection in noninteractive terminals.\n"
+                "Use: contextos-auditor setup --framework "
+                "{demo,crewai,langgraph,openai-agents,autogen}\n"
+                "Start with --framework demo if you do not have an agent yet.",
+                file=sys.stderr,
+            )
+            return 2
+        framework = _choose("What would you like to connect?", {
+            "demo": "Try without an agent or API key",
+            "crewai": "CrewAI",
+            "langgraph": "LangGraph / LangChain callbacks",
+            "openai-agents": "OpenAI Agents SDK",
+            "autogen": "AutoGen 0.4+",
+        })
+        if framework is None:
+            return 0
+    print(setup_guide(framework, Path(args.audit_root)))
+    return 0
+
+
+def cmd_troubleshoot(args: argparse.Namespace) -> int:
+    topic = args.topic
+    if topic is None:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print("Choose a troubleshooting topic; this command will not prompt in a pipe:")
+            for name, title in TOPICS.items():
+                print(f"  contextos-auditor troubleshoot {name}  # {title}")
+            return 0
+        topic = _choose("What is going wrong?", TOPICS)
+        if topic is None:
+            return 0
+    print(troubleshooting_guide(topic, args.framework, Path(args.audit_root)))
     return 0
 
 
@@ -530,10 +602,13 @@ def _poll_interval_arg(value: str) -> float:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="contextos-auditor")
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    ap.add_argument("--debug", action="store_true", help="show full tracebacks for unexpected CLI errors")
     sub = ap.add_subparsers(dest="command")
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--audit-root", default=str(_DEFAULT_AUDIT_ROOT))
+    common.add_argument("--debug", action="store_true", default=argparse.SUPPRESS,
+                        help="show full tracebacks for unexpected CLI errors")
 
     p_watch = sub.add_parser("watch", parents=[common], help="live view of the most recent (or a named) session")
     p_watch.add_argument("--session", help="path to a session directory (overrides auto-pick)")
@@ -555,8 +630,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_history.add_argument("--html", help="also write the history as a self-contained HTML page with sparklines")
     p_history.set_defaults(func=cmd_history)
 
-    p_doctor = sub.add_parser("doctor", help="check which framework SDKs/hooks are available")
+    p_doctor = sub.add_parser("doctor", parents=[common], help="diagnose environment, SDKs and local recording")
+    p_doctor.add_argument("--framework", choices=tuple(_FRAMEWORKS),
+                          help="check only the framework you use")
+    p_doctor.add_argument("--check-recording", action="store_true",
+                          help="test synthetic recording in a cleaned-up temporary directory; no model calls")
+    p_doctor.add_argument("--json", action="store_true", help="print a minimal shareable JSON report")
+    p_doctor.add_argument("--output", metavar="FILE",
+                          help="write the shareable JSON report to a new file; never upload or overwrite")
+    p_doctor.add_argument("--strict", action="store_true",
+                          help="exit 1 if an environment or selected-framework check fails")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_setup = sub.add_parser("setup", parents=[common], help="guided setup; prints steps without changing your environment")
+    p_setup.add_argument("--framework", choices=("demo", *tuple(_FRAMEWORKS)),
+                         help="skip the interactive menu; required in pipes and CI")
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_troubleshoot = sub.add_parser("troubleshoot", parents=[common],
+                                   help="guided recovery for installation, capture, totals, browser and CLI problems")
+    p_troubleshoot.add_argument("topic", nargs="?", choices=tuple(TOPICS))
+    p_troubleshoot.add_argument("--framework", choices=tuple(_FRAMEWORKS))
+    p_troubleshoot.set_defaults(func=cmd_troubleshoot)
 
     p_demo = sub.add_parser(
         "demo", parents=[common],
@@ -579,9 +674,7 @@ def main(argv: list[str] | None = None) -> int:
             reconfigure(errors="backslashreplace")
     ap = build_parser()
     args = ap.parse_args(argv if argv is not None else sys.argv[1:])
-    if getattr(args, "func", None) is None:        # Bare `contextos-auditor` used to exit 2 with an argparse usage
-        # error, which tells a first-time user nothing about what to do
-        # next. Point them at the one command that works with no setup.
+    if getattr(args, "func", None) is None:
         print(
             "contextos-auditor -- see what your AI agent is really spending.\n"
             "\n"
@@ -589,11 +682,14 @@ def main(argv: list[str] | None = None) -> int:
             "\n"
             "    contextos-auditor demo --serve\n"
             "\n"
-            "Already have an agent?\n"
+            "Connect your own agent with guided steps:\n"
             "\n"
-            "    contextos-auditor doctor    # the one-line snippet for your framework\n"
+            "    contextos-auditor setup     # choose your framework; no automatic installs\n"
             "    contextos-auditor watch     # live view once your agent is running\n"
             "\n"
+            "Something wrong?\n"
+            "    contextos-auditor troubleshoot  # guided recovery by symptom\n"
+            "    contextos-auditor doctor        # environment and capture checks\n\n"
             "Full command list: contextos-auditor --help"
         )
         return 0
@@ -608,14 +704,23 @@ def main(argv: list[str] | None = None) -> int:
         # traceback at them. Anything that still escapes a command becomes
         # one clear line and exit 1. (The traceback is still available via
         # CONTEXTOS_AUDITOR_TRACEBACK=1 for bug reports.)
-        import os
-
-        if os.environ.get("CONTEXTOS_AUDITOR_TRACEBACK"):
+        if args.debug or os.environ.get("CONTEXTOS_AUDITOR_TRACEBACK"):
             raise
         print(f"contextos-auditor: {type(e).__name__}: {e}", file=sys.stderr)
+        if isinstance(e, FileExistsError):
+            print("Choose a new output filename; existing files are never overwritten by doctor.",
+                  file=sys.stderr)
+        elif isinstance(e, PermissionError):
+            print("Check read/write access to the chosen path. Do not run your agent as administrator.",
+                  file=sys.stderr)
+        elif isinstance(e, FileNotFoundError):
+            print("Check the path exists. For --output, create its parent directory or choose a filename here.",
+                  file=sys.stderr)
         print(
-            "Re-run with CONTEXTOS_AUDITOR_TRACEBACK=1 for the full traceback, and\n"
-            "please report it: https://github.com/surajJha/contextOS-auditor/issues",
+            "Run `contextos-auditor troubleshoot crash` for recovery steps.\n"
+            "Re-run with --debug (or CONTEXTOS_AUDITOR_TRACEBACK=1) for the full traceback.\n"
+            "Review debug output for secrets before sharing it.\n"
+            "Report reproducible issues: https://github.com/surajJha/contextOS-auditor/issues",
             file=sys.stderr,
         )
         return 1

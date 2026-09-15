@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        The auditor runs entirely on your machine and never sends data anywhere.
-        That also means we cannot see your session — so the details below are the
-        only thing we have to go on.
+        Auditor records locally by default; optional OpenTelemetry export goes
+        to your configured endpoint. We cannot see your session, so please
+        provide a minimal reproduction and reviewed diagnostics.
 
         **Please do not paste raw session data.** It can contain your source code
         and prompts. Redacted excerpts or the summary numbers are enough.
@@ -28,7 +28,7 @@ body:
         If `contextos-auditor demo` also shows it, say so — that is the easiest
         case for us to fix, because it needs no agent and no API key.
       placeholder: |
-        1. pip install contextos-auditor[langgraph]
+        1. python -m pip install "contextos-auditor[langgraph]"
         2. attach with ...
         3. run `contextos-auditor watch`
         4. the savings number shows ...
@@ -53,8 +53,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `pip show contextos-auditor | grep Version`
-      placeholder: "0.1.0"
+      description: Output of `contextos-auditor --version`
+      placeholder: "0.3.0"
     validations:
       required: true
 
@@ -69,6 +69,10 @@ body:
   - type: textarea
     id: doctor
     attributes:
-      label: Output of `contextos-auditor doctor`
-      description: This is automatically formatted as code, no backticks needed.
-      render: shell
+      label: Reviewed diagnostics (optional)
+      description: |
+        On 0.3.0+, run `contextos-auditor doctor --check-recording --json`
+        and add `--framework crewai` (or your framework) if relevant.
+        Review the minimal JSON before pasting. Do not paste raw console
+        tracebacks or session files; they may contain private data.
+      render: json

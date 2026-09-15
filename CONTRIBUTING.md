@@ -9,8 +9,8 @@ contribution ships under that same licence.
 
 ## Setting up
 
-There is nothing to install. The package has zero runtime dependencies and the
-test suite needs only `pytest`:
+The base package has zero required runtime dependencies. Install it and
+the `pytest` development extra in a virtual environment:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -18,8 +18,11 @@ pip install -e ".[dev]"
 python -m pytest
 ```
 
-The framework adapters are tested against stubs, not real SDKs, so you do not
-need CrewAI or LangGraph installed to work on them.
+The unit suite uses framework stand-ins, so real SDKs are not required.
+For optional real-SDK checks, install the selected framework and run
+`python -m pytest scripts/test_sdk_integration_smoke.py`. These checks use
+real SDK orchestration with deterministic offline model responses, not
+paid provider calls.
 
 ## The one rule that matters
 
@@ -31,7 +34,8 @@ code actually does. A number nobody can reconstruct from the trace is worse
 than no number at all — the entire value of this project is that its output
 holds up when someone checks it against their bill.
 
-Related: the reported savings are an **upper bound**. Do not remove the
+Related: reported savings are **estimates, not guaranteed bill reductions**.
+Do not remove the
 caveats, the `ESTIMATED` badges, or the clamp that stops reported waste from
 exceeding tokens actually spent.
 
@@ -55,3 +59,7 @@ something is done, not restate what the line does.
 Use the issue templates. If `contextos-auditor demo` reproduces the problem,
 say so — it needs no agent, no API key and no network, which makes it by far
 the fastest thing to debug.
+
+On 0.3.0+, `contextos-auditor troubleshoot` provides symptom-based help.
+For an issue, include your version, framework, minimal reproduction, and
+a reviewed `doctor --json` report. Do not share raw traces or credentials.

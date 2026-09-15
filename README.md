@@ -14,8 +14,9 @@ are separate. Licensed
 use inside your company; the only restriction is that you can't use it to
 build a competing product.
 
-> **Upgrading from 0.2.0?** Version 0.2.1 includes recording, accounting,
-> streaming and Windows fixes that were missing from the 0.2.0 artifact.
+> **Upgrading?** Version 0.3.0 adds guided setup, symptom-based troubleshooting,
+> and shareable diagnostics. It also includes the recording, accounting,
+> streaming and Windows fixes introduced in 0.2.1.
 > Run `python -m pip install --upgrade contextos-auditor` in your agent's
 > environment and check `contextos-auditor --version`. Validate your own
 > framework and recorded totals before production use; savings remain estimates.
@@ -42,7 +43,7 @@ When you're ready to point it at your own agent:
 
 ```bash
 python -m pip install "contextos-auditor[crewai]"  # or [langgraph] / [autogen] / [openai-agents]
-contextos-auditor doctor                     # prints the one-line snippet for your framework
+contextos-auditor setup --framework crewai    # or choose your framework interactively
 ```
 
 Install into the **same environment that runs your agent**. If its SDK is
@@ -70,7 +71,7 @@ the base viewer can. This was checked against PyPI on 2026-09-12.
 `all` combines the framework hook dependencies and `tiktoken`, not `otel`,
 full LangGraph/AutoGen applications, or every provider. Prefer the extra
 you need; installing `all` may change dependencies in your agent environment.
-`doctor` checks discoverable SDK versions, not end-to-end compatibility;
+`doctor` checks the environment and discoverable SDK versions, not end-to-end compatibility;
 verify a small real run and inspect its trace before trusting totals.
 
 ![Live Auditor dashboard, screenshot of a real crewAI session](https://raw.githubusercontent.com/surajJha/contextOS-auditor/main/docs/screenshots/live-dashboard.png)
@@ -118,6 +119,122 @@ Use the Python CLI, or ask the person recording a session to export a
 self-contained HTML report that you can open without Python.
 `scripts/build_binary.sh` is a local macOS/Linux viewer build helper, not
 a prebuilt download or a Windows build guarantee.
+
+## Guided setup and troubleshooting
+
+Available in **0.3.0 and later**. If these commands are missing, run
+`python -m pip install --upgrade contextos-auditor` in your agent's
+environment and confirm `contextos-auditor --version`.
+
+Start with:
+
+```bash
+contextos-auditor setup
+```
+
+Choose a demo or your framework. Setup shows the interpreter you are using,
+environment checks, an integration template, and how to tell whether
+capture is working. It **does not install packages, modify your agent,
+ask for credentials, or launch a paid model run**. Templates wrap your
+existing application; the demo is the only path that needs no agent.
+Generated commands use the current interpreter, with PowerShell quoting
+on Windows.
+
+For scripts, CI, or a terminal without interactive input:
+
+```bash
+contextos-auditor setup --framework crewai
+contextos-auditor setup --framework demo
+```
+
+Choices: `demo`, `crewai`, `langgraph`, `openai-agents`, `autogen`.
+Bare `setup` exits with guidance instead of waiting for input in a pipe.
+
+### Something went wrong
+
+Run `contextos-auditor troubleshoot` for a symptom menu, or choose directly:
+
+| Symptom | Command |
+| --- | --- |
+| Installation, wrong environment, command not found | `contextos-auditor troubleshoot install` |
+| Agent runs but no session or turns appear | `contextos-auditor troubleshoot no-data` |
+| Tokens or costs look wrong | `contextos-auditor troubleshoot wrong-totals` |
+| Browser, port, SSH, or Docker trouble | `contextos-auditor troubleshoot dashboard` |
+| CLI or recording errors | `contextos-auditor troubleshoot crash` |
+
+Add `--framework crewai` (or your framework) and
+`--audit-root /path/to/project/.contextos/audit` when needed. These guides
+print concrete checks and commands; they do not automatically repair
+your environment. If installation fails before the CLI can run, use the
+virtual-environment instructions above; the CLI cannot diagnose a package
+that has not been installed.
+
+### Check before trusting a run
+
+```bash
+contextos-auditor doctor --framework crewai --check-recording
+```
+
+This checks your interpreter, selected SDK import/version, audit-directory
+access, session-file discovery, and a small synthetic recording roundtrip.
+The synthetic check uses temporary files, cleans them up, and makes no
+model calls. It does not alter existing recordings or create a real agent
+session. No sessions yet is normal for a fresh project.
+
+**A passing doctor is not proof your SDK hooks are attached.** Run a small
+real task, confirm a session appears and turns increase, and compare usage
+with what the SDK reports. Version-range checks are advisory, not a promise
+that every release inside a range was individually tested.
+
+### Advanced diagnostics and support
+
+```bash
+# Machine-readable, minimal report; check only your chosen framework.
+contextos-auditor doctor --framework langgraph --json --strict
+
+# Include a synthetic recorder check and write a NEW support file.
+contextos-auditor doctor --framework langgraph --check-recording --output auditor-diagnostics.json
+
+# Trace the actual CLI command that fails.
+contextos-auditor report --debug
+```
+
+`--strict` exits 1 when required environment or selected-framework checks
+fail; without it, doctor remains informational. Missing unrelated optional
+SDKs do not fail the check. Ordinary CLI execution or output-write failures
+still exit nonzero. JSON reports include a schema version and `healthy`
+field; SDK import chatter is not mixed into JSON stdout.
+
+Support JSON contains allowlisted environment information and diagnostic
+results, including standard SDK version numbers when discoverable.
+SDK rows identify the import module being checked: for `langgraph`, the
+version belongs to its `langchain_core` hook dependency, not the graph runtime.
+Custom/local version strings are omitted rather than exposed.
+It does not contain prompts, tool results, session contents/IDs, absolute paths,
+environment-variable values, or raw exception messages. It is never
+uploaded. `--output` refuses to overwrite an existing file; choose another
+name for another report and ensure its parent directory exists.
+Review the file before attaching it to a
+[support issue](https://github.com/surajJha/contextOS-auditor/issues).
+Local console details and `--debug` tracebacks are **not** sanitized support
+reports: review them for private paths, prompts, or credentials before sharing.
+
+For repeated capture warnings, set this **in the process running your
+agent**, before the failing run:
+
+```python
+import os
+os.environ["CONTEXTOS_AUDITOR_VERBOSE"] = "1"
+```
+
+Default capture warnings appear once per error label per process. Verbose
+mode writes every occurrence to stderr without changing your application's
+warning filters, including repeats suppressed by default
+Python warning filters. Remove the variable or set it to `0` to return to
+the default. Python's `-W always` alone does not override Auditor's default
+deduplication. CLI `--debug` enables CLI tracebacks only; it cannot change
+an already running agent. `CONTEXTOS_AUDITOR_TRACEBACK=1` remains available
+for compatibility.
 
 ## Quickstart
 
@@ -223,9 +340,10 @@ For an SSH host, forward its loopback port
 (`ssh -L 8765:127.0.0.1:8765 user@host`) and open
 `http://127.0.0.1:8765/` locally while the remote viewer runs.
 
-Not sure any of this is working? Run `contextos-auditor doctor` first —
-it tells you exactly which framework SDKs it can see and prints the
-correct snippet for each, before you touch your agent code at all.
+Not sure any of this is working? Run `contextos-auditor doctor` first.
+Use the framework template above to attach the adapter, then confirm that
+your real run produces a session. Import availability alone is not proof
+that capture is working.
 
 ## Reading the trace
 

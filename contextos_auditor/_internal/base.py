@@ -59,29 +59,40 @@ _READ_ALIASES = {"read_file", "readfile", "read_text_file"}
 _warned_labels: set[str] = set()
 
 
+def _stderr_warning(message: str) -> None:
+    try:
+        print(message, file=sys.stderr)
+    except Exception:
+        # A closed or custom host stream must not break the observed agent.
+        pass
+
+
 def _nonfatal_warning(message: str, *, stacklevel: int = 3) -> None:
     try:
         warnings.warn(message, stacklevel=stacklevel + 1)
     except Warning:
         # A host application's -W error policy must not turn an observer's
         # diagnostic into a failed agent run.
-        try:
-            print(message, file=sys.stderr)
-        except Exception:
-            pass
+        _stderr_warning(message)
 
 
 def _warn_once(label: str, exc: Exception) -> None:
-    if label in _warned_labels:
+    verbose = os.environ.get("CONTEXTOS_AUDITOR_VERBOSE") == "1"
+    if not verbose and label in _warned_labels:
         return
     _warned_labels.add(label)
-    _nonfatal_warning(
+    message = (
         f"contextos-auditor: internal error in {label}, this observation was "
         f"dropped but your agent's real run is unaffected ({exc.__class__.__name__}: {exc}). "
-        "This warning only appears once per process; run with "
-        "`python -W always::UserWarning` for every occurrence.",
-        stacklevel=3,
+        "Capture totals may be incomplete. "
+        "Set CONTEXTOS_AUDITOR_VERBOSE=1 in your agent's environment for every occurrence."
     )
+    if verbose:
+        # Warning filters are process-global on supported Python versions.
+        # Direct stderr output repeats without changing the host's policy.
+        _stderr_warning(message)
+    else:
+        _nonfatal_warning(message, stacklevel=3)
 
 
 def guarded(label: str):

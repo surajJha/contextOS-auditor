@@ -2,6 +2,35 @@
 
 All notable changes to `contextos-auditor` are documented here.
 
+## [0.3.0] — 2026-09-15
+
+Guided setup and actionable troubleshooting for first-time and experienced
+users. Existing adapter APIs and the zero-required-runtime-dependency base
+installation are unchanged. Diagnostics do not replace verifying capture
+on your own agent.
+
+### Added
+
+- Guided `setup` for demos and four frameworks, with noninteractive
+  `--framework` selection, interpreter-specific commands, and lifecycle-safe
+  integration templates. No automatic installation or application changes.
+- Symptom-based `troubleshoot` guides for installation, missing capture,
+  unexpected totals, browser/headless environments, and CLI failures.
+- Expanded `doctor` with selected-framework checks, local recording
+  self-test, structured `--json`, opt-in `--strict` exit status, and
+  allowlisted `--output` support files that are never uploaded or overwritten.
+- `--debug` before or after CLI subcommands to expose unexpected tracebacks.
+
+### Fixed
+
+- SDK import failures are distinguished from missing top-level packages.
+  Importability and broad compatibility ranges no longer imply working
+  application capture.
+- `CONTEXTOS_AUDITOR_VERBOSE=1` emits repeated capture warnings from the
+  agent process; the previous `-W always` suggestion could not bypass
+  Auditor's own warning deduplication. Verbose output goes to stderr without
+  changing the host application's warning filters.
+
 ## [0.2.1] — 2026-09-12
 
 Corrects the gap between the published 0.2.0 artifact and the verified

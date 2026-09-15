@@ -9,8 +9,8 @@ body:
         this tool is that its numbers are defensible, so a number we cannot
         justify is a bug in the product, not a misunderstanding on your part.
 
-        Useful context before you write: the auditor reports an **upper bound**
-        on recoverable waste. It cannot see whether your provider billed a cached
+        Useful context before you write: Auditor reports **estimated opportunities**,
+        not guaranteed bill reductions. It cannot see whether your provider billed a cached
         prefix at a discount, and it cannot model how the agent's trajectory
         would have changed if the waste were removed.
 
@@ -18,7 +18,7 @@ body:
     id: number
     attributes:
       label: Which number, and what it said
-      placeholder: "It reported +42% savings, but our actual bill only moved 3%."
+      placeholder: "The prompt-token total differs from the SDK usage for the same completed calls."
     validations:
       required: true
 
@@ -35,6 +35,8 @@ body:
     attributes:
       label: Exported JSON (optional, please redact)
       description: |
-        The HTML report has a "Download JSON" button. It contains tool names,
-        file paths and token counts. Redact anything sensitive before pasting.
+        Provide only a minimal sanitized excerpt needed to explain the discrepancy.
+        Session exports can include source code, tool arguments/results, prompts,
+        paths, and secrets missed by pattern-based redaction. Do not paste a raw
+        export. A doctor support report helps diagnose the environment, not totals.
       render: json

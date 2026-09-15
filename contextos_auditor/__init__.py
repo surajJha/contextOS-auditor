@@ -21,6 +21,6 @@ from __future__ import annotations
 from contextos_auditor._internal.audit_emit import AuditSession, load_events
 from contextos_auditor._internal.shadow_kit import shadow_session
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 __all__ = ["AuditSession", "load_events", "shadow_session", "__version__"]

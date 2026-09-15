@@ -85,7 +85,7 @@ def test_demo_cli_prints_a_populated_report(tmp_path, capsys, monkeypatch):
     assert rc == 0
     assert "duplicate reads" in out
     assert "estimated" in out
-    assert "contextos-auditor doctor" in out
+    assert "contextos-auditor setup" in out
 
 
 def test_bare_invocation_points_at_the_demo_instead_of_an_argparse_error(capsys):

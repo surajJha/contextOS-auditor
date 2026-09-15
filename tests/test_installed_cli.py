@@ -87,3 +87,31 @@ def test_unicode_paths_on_legacy_console(tmp_path):
     result = _run(tmp_path, "demo", "--audit-root", str(root), encoding="cp1252")
     assert result.returncode == 0, result.stderr.decode("cp1252", errors="replace")
     assert list(root.glob("*/events.jsonl"))
+
+
+def test_installed_setup_and_recovery_work_without_frameworks(tmp_path):
+    for framework in ("demo", "crewai", "langgraph", "openai-agents", "autogen"):
+        setup = _run(tmp_path, "setup", "--framework", framework)
+        assert setup.returncode == 0, setup.stderr
+        assert b"contextos_auditor.cli" in setup.stdout
+    recovery = _run(tmp_path, "troubleshoot", "no-data")
+    assert recovery.returncode == 0, recovery.stderr
+    assert b"--check-recording" in recovery.stdout
+    assert not (tmp_path / ".contextos").exists()
+
+
+def test_installed_doctor_synthetic_selftest_and_private_support_report(tmp_path):
+    root = tmp_path / "private-project" / ".contextos" / "audit"
+    output = tmp_path / "support.json"
+    doctor = _run(tmp_path, "doctor", "--check-recording", "--audit-root", str(root),
+                  "--json", "--strict", "--output", str(output))
+    assert doctor.returncode == 0, doctor.stderr
+    report = json.loads(doctor.stdout)
+    assert report["healthy"] is True
+    sdk_checks = {check["id"]: check for check in report["checks"] if check["id"].startswith("sdk:")}
+    assert sdk_checks["sdk:langgraph"]["module"] == "langchain_core"
+    assert report == json.loads(output.read_text(encoding="utf-8"))
+    assert str(tmp_path) not in doctor.stdout.decode("utf-8")
+    assert "private-project" not in doctor.stdout.decode("utf-8")
+    assert not root.exists()
+    assert set(tmp_path.iterdir()) == {output}

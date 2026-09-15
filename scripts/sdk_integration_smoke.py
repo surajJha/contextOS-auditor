@@ -19,6 +19,8 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
+import sys
 import threading
 import traceback
 import warnings
@@ -508,6 +510,21 @@ def main():
                 report["results"][name] = {"status": "fail", "error": traceback.format_exc()}
     assert socket.socket.connect is original_connect
     assert socket.create_connection is original_create_connection
+    for name, result in report["results"].items():
+        diagnostic_root = (args.out_dir / name / "doctor-fresh-root").resolve()
+        try:
+            diagnostic = subprocess.run(
+                [sys.executable, *(["-I"] if sys.flags.isolated else []),
+                 "-m", "contextos_auditor.cli", "doctor",
+                 "--framework", name.replace("_", "-"), "--check-recording",
+                 "--json", "--strict", "--audit-root", str(diagnostic_root)],
+                capture_output=True, text=True, encoding="utf-8", timeout=120, check=True,
+            )
+            result["diagnostics"] = json.loads(diagnostic.stdout)
+            assert result["diagnostics"]["healthy"], result["diagnostics"]
+            assert not diagnostic_root.exists(), "Doctor created a permanent audit directory"
+        except Exception:
+            result.update(status="fail", diagnostics_error=traceback.format_exc())
     (args.out_dir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return int(any(item["status"] != "pass" for item in report["results"].values()))

@@ -235,29 +235,30 @@ def test_session_meta_is_read_as_utf8(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_doctor_survives_an_sdk_that_raises_on_import(monkeypatch, capsys):
+def test_doctor_survives_an_sdk_that_raises_on_import(monkeypatch, capsys, tmp_path):
     """PROVEN failure: an installed SDK whose transitive dependency raises
     at import time (RuntimeError, not ImportError) escaped straight out of
     `doctor` -- the one command that must never be the thing that breaks."""
-    real_import = __import__
+    from contextos_auditor._internal import diagnostics
 
-    def fake_import(name, *a, **kw):
-        if name == "crewai":
-            raise RuntimeError("broken transitive dep")
-        if name in ("langchain_core", "agents", "autogen_core"):
-            raise ImportError(f"No module named {name!r}")
-        return real_import(name, *a, **kw)
+    inspected = []
 
-    monkeypatch.setattr("builtins.__import__", fake_import)
-    rc = cmd_doctor(argparse.Namespace())
-    monkeypatch.undo()
+    def fake_probe(module):
+        inspected.append(module)
+        if module == "langchain_core":
+            return {"code": "broken", "detail": "broken transitive dep"}
+        return {"code": "missing"}
+
+    monkeypatch.setattr(diagnostics, "_probe_sdk", fake_probe)
+    rc = cmd_doctor(argparse.Namespace(audit_root=str(tmp_path)))
     out = capsys.readouterr().out
 
     assert rc == 0  # optional extras being broken is not doctor failing
     assert "[broken]" in out
     assert "broken transitive dep" in out
     # the remaining frameworks were still checked after the broken one
-    assert "langgraph" in out and "autogen" in out
+    assert all(framework in out for framework in diagnostics.FRAMEWORKS)
+    assert inspected[inspected.index("langchain_core") + 1:] == ["agents", "autogen_core"]
 
 
 # --------------------------------------------------------------------------

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "contextos-auditor"
-version = "0.2.1"
+version = "0.3.0"
 description = "Local-first token usage auditing and estimated costs for CrewAI, LangGraph, AutoGen and OpenAI Agents SDK. No signup; optional opt-in OpenTelemetry export. Free for commercial use under PolyForm Shield 1.0.0; see LICENSE."
 readme = "README.md"
 license = { file = "LICENSE" }

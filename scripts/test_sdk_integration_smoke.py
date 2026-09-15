@@ -26,7 +26,7 @@ def test_real_sdk_offline_orchestration(framework, distribution, tmp_path):
     script = Path(__file__).with_name("sdk_integration_smoke.py")
     result = subprocess.run(
         [sys.executable, str(script), "--framework", framework, "--out-dir", str(tmp_path)],
-        capture_output=True, text=True, timeout=90, check=False,
+        capture_output=True, text=True, timeout=180, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads((tmp_path / "results.json").read_text())

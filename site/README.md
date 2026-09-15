@@ -103,10 +103,10 @@ The unrelated `contextos.ai` domain is not owned by this project and must
 not be used in deployment metadata. Local changes do not update the live
 site until a deployment occurs.
 
-The existing manual `.github/workflows/azure-static-web-apps.yml` uploads
-only `marketing-site/`. To use it later, configure an existing app's
-`AZURE_STATIC_WEB_APPS_API_TOKEN` repository secret, dispatch from `main`,
-and verify the resulting URL and domain metadata before announcing it.
+`.github/workflows/cloudflare-pages.yml` deploys `marketing-site/` on
+matching pushes to `main` or manual dispatch, using the configured
+Cloudflare repository secrets. The Azure deployment workflow was removed;
+the retained Azure resource is not the active website deployment.
 
 The Auditor's public repository is
 <https://github.com/surajJha/contextOS-auditor>; its README and the PyPI
