@@ -518,9 +518,10 @@ def main():
                  "-m", "contextos_auditor.cli", "doctor",
                  "--framework", name.replace("_", "-"), "--check-recording",
                  "--json", "--strict", "--audit-root", str(diagnostic_root)],
-                capture_output=True, text=True, encoding="utf-8", timeout=120, check=True,
+                capture_output=True, text=True, encoding="utf-8", timeout=120, check=False,
             )
             result["diagnostics"] = json.loads(diagnostic.stdout)
+            assert diagnostic.returncode == 0, diagnostic.stderr
             assert result["diagnostics"]["healthy"], result["diagnostics"]
             assert not diagnostic_root.exists(), "Doctor created a permanent audit directory"
         except Exception:

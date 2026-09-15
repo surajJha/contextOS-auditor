@@ -1023,6 +1023,60 @@ def test_selftest_uses_nearest_existing_ancestor_without_creating_audit_root(tmp
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize(("failure", "status", "message"), [
+    (None, "ok", "self-test passed"),
+    ("PermissionError", "error", "filesystem permissions"),
+    ("OSError", "error", "filesystem error"),
+])
+def test_recorder_child_resolves_windows_home_inside_synthetic_workspace(
+    tmp_path, monkeypatch, failure, status, message,
+):
+    """Exercise Windows expanduser rules even when the host has a pwd database."""
+    monkeypatch.setenv("HOME", "private-real-home")
+    monkeypatch.setenv("USERPROFILE", "private-real-profile")
+    real_run = subprocess.run
+    seen = []
+    windows_home = """
+import ntpath
+from pathlib import Path
+def windows_home(cls):
+    expanded = ntpath.expanduser("~")
+    if expanded == "~":
+        raise RuntimeError("Could not determine home directory.")
+    return cls(expanded)
+Path.home = classmethod(windows_home)
+"""
+    if failure:
+        windows_home += (
+            "Path.write_text = lambda *args, **kwargs: "
+            f"(_ for _ in ()).throw({failure}('private write failure'))\n"
+        )
+
+    def windows_semantics_run(command, **kwargs):
+        seen.append((command[-1], kwargs["env"]))
+        command = list(command)
+        command[3] = windows_home + "\n" + command[3].replace(
+            "sys.exit(_recording_main(sys.argv[1]))",
+            "result = _recording_main(sys.argv[1]); "
+            "from contextos_auditor._internal.tokens import CACHE_DIR; "
+            "assert CACHE_DIR.is_relative_to(Path(sys.argv[1])); sys.exit(result)",
+        )
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(d.subprocess, "run", windows_semantics_run)
+    report = d.collect_diagnostics(tmp_path, check_recording=True)
+    row = check(report, "recording")
+    assert row["status"] == status, row.get("detail", row["message"])
+    assert message in row["message"], row.get("detail", row["message"])
+    directory, environment = seen[0]
+    assert environment["HOME"] == environment["USERPROFILE"] == directory
+    assert "private-real" not in json.dumps(environment)
+    assert "private" not in json.dumps(d.support_report(report))
+    assert os.environ["HOME"] == "private-real-home"
+    assert os.environ["USERPROFILE"] == "private-real-profile"
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_selftest_inherits_no_secrets_and_never_initializes_tokenizer_exporter_or_network(tmp_path, monkeypatch):
     for key in ("CONTEXTOS_AUDITOR_OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT",
                 "OPENAI_API_KEY", "TIKTOKEN_CACHE_DIR", "CONTEXTOS_AUDITOR_OTEL"):
@@ -1050,11 +1104,12 @@ urllib.request.urlopen = forbidden
 """
 
     def guarded_run(command, **kwargs):
-        assert set(kwargs["env"]) <= {"PYTHONPATH", "SystemRoot"}
+        assert set(kwargs["env"]) <= {"PYTHONPATH", "SystemRoot", "HOME", "USERPROFILE"}
         assert "private-value" not in json.dumps(kwargs["env"])
         assert command[1] == "-BS"
         directory = Path(command[-1])
         assert directory.parent == tmp_path
+        assert kwargs["env"]["HOME"] == kwargs["env"]["USERPROFILE"] == str(directory)
         seen.append(directory)
         guarded_command = list(command)
         guarded_command[3] = (

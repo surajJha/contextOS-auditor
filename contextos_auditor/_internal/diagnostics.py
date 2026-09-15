@@ -625,7 +625,13 @@ def _recording_check(ancestor: Path) -> dict[str, Any]:
     try:
         with TemporaryDirectory(prefix=".contextos-auditor-check-", dir=ancestor) as directory:
             # No inherited export/provider/tokenizer settings or credentials.
-            env = {"PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+            # Windows Path.home() requires USERPROFILE. Point both platforms'
+            # home lookup at this disposable workspace, never the user's home.
+            env = {
+                "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+                "HOME": directory,
+                "USERPROFILE": directory,
+            }
             if sys.platform == "win32" and os.environ.get("SystemRoot"):
                 env["SystemRoot"] = os.environ["SystemRoot"]
             result = subprocess.run(
